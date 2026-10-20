@@ -1,12 +1,12 @@
 import AppKit
 import ApplicationServices
 
-/// Hold LEFT Option (alone) = push-to-talk. Right Option is ignored.
+/// Hold LEFT Option (alone) = push-to-talk command. Hold RIGHT Option = dictation only (words typed, no commands).
 /// Option + any other key (e.g. ⌥← or typing "©") cancels, so normal shortcuts keep working.
 /// Left Option + Shift = lock: keeps listening until you tap Option again.
 @MainActor
 final class HotkeyMonitor {
-    var onBegin: (() -> Void)?
+    var onBegin: ((_ dictation: Bool) -> Void)?
     var onEnd: (() -> Void)?
     var onCancel: (() -> Void)?
     var onLock: (() -> Void)?
@@ -16,6 +16,7 @@ final class HotkeyMonitor {
     private let holdDelay: TimeInterval = 0.15
     private var pending: DispatchWorkItem?
     private var active = false
+    private var activeSide = false   // true: the right ⌥ (dictation) started it
     private var locked = false
     private var lockArmed = false   // every key released since locking; the next ⌥ tap unlocks
     private var monitors: [Any] = []
@@ -42,7 +43,9 @@ final class HotkeyMonitor {
         // Left Option only: device-dependent bits 0x20 = left ⌥, 0x40 = right ⌥.
         let raw = event.modifierFlags.rawValue
         let leftOption = raw & 0x20 != 0 && raw & 0x40 == 0
+        let rightOption = raw & 0x40 != 0 && raw & 0x20 == 0
         let optionOnly = mods == .option && leftOption
+        let rightOnly = mods == .option && rightOption
         let lockCombo = mods == [.option, .shift] && leftOption
 
         if locked {
@@ -64,16 +67,18 @@ final class HotkeyMonitor {
             return
         }
 
-        if optionOnly, pending == nil, !active {
+        if (optionOnly || rightOnly), pending == nil, !active {
+            let dictation = rightOnly
             let work = DispatchWorkItem { [weak self] in
                 guard let self else { return }
                 self.pending = nil
                 self.active = true
-                self.onBegin?()
+                self.activeSide = dictation
+                self.onBegin?(dictation)
             }
             pending = work
             DispatchQueue.main.asyncAfter(deadline: .now() + holdDelay, execute: work)
-        } else if !optionOnly {
+        } else if !(activeSide ? rightOnly : optionOnly) {
             if let pending { pending.cancel(); self.pending = nil }
             if active {
                 active = false

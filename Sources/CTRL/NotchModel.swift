@@ -181,14 +181,22 @@ final class NotchModel: ObservableObject {
 
     // MARK: Hotkey events
 
-    func begin() {
+    /// Right ⌥: dictation only. What you say gets typed, nothing is interpreted.
+    @Published private(set) var dictationOnly = false
+
+    func begin(dictation: Bool = false) {
+        dictationOnly = dictation
         dismissTask?.cancel()
         moveToActiveScreen()
         transcript = ""
         levels = levels.map { _ in 0 }
         phase = .listening
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
-        Task { self.readFrontApp() }   // after the notch appears
+        if dictation {
+            frontApp = NSWorkspace.shared.frontmostApplication.flatMap { $0.bundleIdentifier == Bundle.main.bundleIdentifier ? nil : $0 }
+        } else {
+            Task { self.readFrontApp() }   // after the notch appears
+        }
         startTask = Task {
             do { try await recorder.start() }
             catch { show(.message("Mic error: \(error.localizedDescription)")) }
@@ -309,6 +317,15 @@ final class NotchModel: ObservableObject {
             await startTask?.value
             let text = await recorder.stop()
             guard !text.isEmpty else { return close() }
+            if dictationOnly {
+                dictationOnly = false
+                close()
+                frontApp?.activate()
+                try? await Task.sleep(for: .milliseconds(80))
+                await Typer.type(text, pressReturn: false)
+                Memory.record(said: text, did: "typed (dictation)", app: frontApp?.localizedName)
+                return
+            }
             transcript = text
             phase = .thinking
             await handle(text)
@@ -317,6 +334,7 @@ final class NotchModel: ObservableObject {
 
     func cancel() {
         guard !isLocked else { return }
+        dictationOnly = false
         Task {
             await startTask?.value
             await recorder.cancel()
