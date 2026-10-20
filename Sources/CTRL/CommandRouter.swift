@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 /// Turns a transcript into an action, using one Jev request (all questions run in parallel).
 struct CommandRouter {
@@ -6,6 +6,7 @@ struct CommandRouter {
         case open(WindowManager.Plan)
         case media(MediaController.Action, preferred: String?)
         case settings(SettingsController.Page, SettingsController.Action)
+        case menu(MenuReader.Item, NSRunningApplication)
         case unsure(best: InstalledApp?)
         case needAddress
         case notACommand
@@ -17,8 +18,9 @@ struct CommandRouter {
 
     let client: TypeSafeClient
 
+    /// `menu`: the menu bar of the app that was in front when you pressed Option.
     @MainActor
-    func route(_ transcript: String) async throws -> Outcome {
+    func route(_ transcript: String, menu: MenuReader.Snapshot? = nil) async throws -> Outcome {
         let catalog = AppCatalog.shared
 
         let normalized = URLExtractor.normalize(transcript)
@@ -73,6 +75,23 @@ struct CommandRouter {
             "settings_theme": SettingsController.themeQuestion,
         ]
 
+        // Menu branch: the front app's own menu items are the options.
+        var menuOptions: [String: MenuReader.Item] = [:]
+        if let menu, !menu.items.isEmpty {
+            let appName = menu.app.localizedName ?? "the current app"
+            let safe = menu.items.filter { !MenuReader.isDangerous($0) }
+            var opts: [String: String] = [:]
+            for item in MenuReader.candidates(safe, for: transcript, limit: 255) {
+                menuOptions[item.key] = item
+                opts[item.key] = "the menu command \(item.path.joined(separator: " → "))" + (item.shortcut.map { " (\($0))" } ?? "")
+            }
+            questions["menu_item"] = .choice("Which \(appName) menu command does the user want to run?", options: opts)
+            if case .choice(let text, var intents) = questions["intent"]! {
+                intents["menu_command"] = "do an action inside \(appName), the app currently in front, like a menu command (new tab, close tab, save, find, reload, zoom, bold, show sidebar, export, duplicate)"
+                questions["intent"] = .choice(text, options: intents)
+            }
+        }
+
         // Every other plausible item gets its own yes/no question (parallel, independent).
         // Ordinal "second/third" slots don't work: the model repeats the first item.
         let spoken = normalized
@@ -94,7 +113,7 @@ struct CommandRouter {
         let response = try await client.systemOne(state: state, questions: questions)
 
         if ProcessInfo.processInfo.environment["CTRL_DEBUG"] == "1" {
-            for k in ["intent", "target1", "windows", "layout", "settings_page", "settings_action"] {
+            for k in ["intent", "target1", "windows", "layout", "settings_page", "settings_action", "menu_item"] {
                 if let a = response.choice(k) { print("  \(k): \(a.choice) (\(String(format: "%.2f", a.confidence)))") }
             }
             for (q, option) in checks.sorted(by: { $0.key < $1.key }) {
@@ -103,6 +122,9 @@ struct CommandRouter {
         }
 
         let intent = response.choice("intent")?.choice
+        if intent == "menu_command", let menu, let a = response.choice("menu_item"), let item = menuOptions[a.choice] {
+            return a.confidence >= 0.4 ? .menu(item, menu.app) : .notACommand
+        }
         if intent == "settings", let p = response.choice("settings_page"), let page = SettingsController.page(p.choice) {
             // "open system settings" / "open settings" with nothing else → just the app.
             let rest = spoken.replacingOccurrences(of: #"\b(open|launch|show|me|the|my|system|settings?|preferences|app|please)\b"#, with: "", options: .regularExpression)

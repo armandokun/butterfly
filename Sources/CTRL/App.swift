@@ -23,12 +23,25 @@ struct CTRLMain {
         AppCatalog.shared.reload()
         print("sites:", URLExtractor.candidates(in: text))
         guard let key = Keychain.apiKey else { print("no API key"); exit(1) }
+        // CTRL_APP=Dia pretends that app is in front (for menu commands).
+        var menu: MenuReader.Snapshot?
+        if let name = ProcessInfo.processInfo.environment["CTRL_APP"],
+           let app = NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == name }) {
+            app.activate(); usleep(400_000)   // like real use: the app is in front
+            let t0 = Date()
+            menu = MenuReader.snapshot(of: app)
+            print("menu: \(menu?.items.count ?? 0) items read in \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
+            if ProcessInfo.processInfo.environment["CTRL_DUMP"] == "1" { menu?.items.forEach { print("   ", $0.key, $0.shortcut ?? "") } }
+        }
         Task {
             let start = Date()
             do {
-                let outcome = try await CommandRouter(client: TypeSafeClient(apiKey: key)).route(text)
+                let outcome = try await CommandRouter(client: TypeSafeClient(apiKey: key)).route(text, menu: menu)
                 let ms = String(format: "(%.0f ms)", Date().timeIntervalSince(start) * 1000)
-                if case .open(let p) = outcome {
+                if case .menu(let item, let app) = outcome {
+                    print("outcome: menu \(item.key) \(item.shortcut ?? "") \(ms)")
+                    if exec { MenuReader.press(item, in: app); try? await Task.sleep(for: .seconds(1)); print("executed") }
+                } else if case .open(let p) = outcome {
                     let names = p.targets.map { t -> String in
                         switch t { case .app(let a): a.name; case .site(let u): u.absoluteString }
                     }

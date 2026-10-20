@@ -18,6 +18,7 @@ final class NotchModel: ObservableObject {
     @Published var levels: [CGFloat] = Array(repeating: 0, count: 5)
 
     private let recorder = SpeechRecorder()
+    private var menuSnapshot: MenuReader.Snapshot?
     private var dismissTask: Task<Void, Never>?
     private var startTask: Task<Void, Never>?
 
@@ -64,6 +65,11 @@ final class NotchModel: ObservableObject {
         levels = levels.map { _ in 0 }
         phase = .listening
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+        // Read the front app's menus while you talk, so it costs no time later.
+        menuSnapshot = nil
+        if let front = NSWorkspace.shared.frontmostApplication, front.bundleIdentifier != Bundle.main.bundleIdentifier {
+            Task { self.menuSnapshot = MenuReader.snapshot(of: front) }
+        }
         startTask = Task {
             do { try await recorder.start() }
             catch { show(.message("Mic error: \(error.localizedDescription)")) }
@@ -101,7 +107,11 @@ final class NotchModel: ObservableObject {
             return show(.message("Add your TypeSafe key from the menu bar"))
         }
         do {
-            switch try await CommandRouter(client: TypeSafeClient(apiKey: key)).route(text) {
+            switch try await CommandRouter(client: TypeSafeClient(apiKey: key)).route(text, menu: menuSnapshot) {
+            case .menu(let item, let app):
+                MenuReader.press(item, in: app)
+                let icon = app.bundleURL.map { InstalledApp(name: app.localizedName ?? "", url: $0) }
+                show(.media(icon, title: item.title, detail: item.path.dropLast().joined(separator: " → ")), for: 1.6)
             case .open(let plan): launch(plan)
             case .media(let action, let preferred):
                 let result = await MediaController.perform(action, preferred: preferred)
