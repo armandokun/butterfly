@@ -5,6 +5,7 @@ struct CommandRouter {
     enum Outcome {
         case open(WindowManager.Plan)
         case media(MediaController.Action, preferred: String?)
+        case settings(SettingsController.Page, SettingsController.Action)
         case unsure(best: InstalledApp?)
         case needAddress
         case notACommand
@@ -50,6 +51,7 @@ struct CommandRouter {
                 "pause_music": "pause, stop, or silence the music or whatever is playing",
                 "next_track": "skip to the next song or track",
                 "previous_track": "go back to the previous song, or replay the last track",
+                "settings": "open a specific System Settings page, check or change a Mac setting (Wi-Fi, Bluetooth, dark mode, sound, battery, storage, display, notifications, privacy, keyboard, updates, etc.)",
                 "none": "anything else, or nothing actionable",
             ]),
             "windows": .choice("How many windows of the same app does the user ask for? Speech-to-text often writes 'two' as 'to' or 'too'.", options: [
@@ -65,6 +67,10 @@ struct CommandRouter {
                 "maximize": "full screen, maximized, as big as possible",
             ]),
             "target1": .choice("Which application or website does the user mention first?", options: options),
+            // Settings branch, asked speculatively in the same request.
+            "settings_page": SettingsController.pageQuestion,
+            "settings_action": SettingsController.actionQuestion,
+            "settings_theme": SettingsController.themeQuestion,
         ]
 
         // Every other plausible item gets its own yes/no question (parallel, independent).
@@ -88,7 +94,7 @@ struct CommandRouter {
         let response = try await client.systemOne(state: state, questions: questions)
 
         if ProcessInfo.processInfo.environment["CTRL_DEBUG"] == "1" {
-            for k in ["intent", "target1", "windows", "layout"] {
+            for k in ["intent", "target1", "windows", "layout", "settings_page", "settings_action"] {
                 if let a = response.choice(k) { print("  \(k): \(a.choice) (\(String(format: "%.2f", a.confidence)))") }
             }
             for (q, option) in checks.sorted(by: { $0.key < $1.key }) {
@@ -97,6 +103,22 @@ struct CommandRouter {
         }
 
         let intent = response.choice("intent")?.choice
+        if intent == "settings", let p = response.choice("settings_page"), let page = SettingsController.page(p.choice) {
+            // "open system settings" / "open settings" with nothing else → just the app.
+            let rest = spoken.replacingOccurrences(of: #"\b(open|launch|show|me|the|my|system|settings?|preferences|app|please)\b"#, with: "", options: .regularExpression)
+            if rest.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters)).isEmpty, let app = SettingsController.settingsApp {
+                return .open(.init(targets: [.app(app)], windowsEach: 1, layout: .none))
+            }
+            var action = SettingsController.Action(rawValue: response.choice("settings_action")?.choice ?? "open") ?? .open
+            if page.toggle == .darkMode {
+                switch response.choice("settings_theme")?.choice {
+                case "dark": action = .turnOn
+                case "light": action = .turnOff
+                default: break
+                }
+            }
+            return .settings(page, action)
+        }
         if let intent, let action = MediaController.Action(rawValue: intent) {
             let preferred = spoken.contains("spotify") ? "Spotify" : (spoken.contains("apple music") || spoken.contains("music app")) ? "Music" : nil
             return .media(action, preferred: preferred)

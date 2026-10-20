@@ -34,6 +34,13 @@ struct CTRLMain {
                     }
                     print("outcome: open \(names) windows=\(p.windowsEach) layout=\(p.layout.rawValue) \(ms)")
                     if exec { await WindowManager.run(p); print("executed, AX trusted:", HotkeyMonitor.hasAccessibility) }
+                } else if case .settings(let page, let action) = outcome {
+                    print("outcome: settings \(page.key) \(action.rawValue) \(ms)")
+                    if exec {
+                        let r = SettingsController.perform(page, action: action)
+                        print("executed: \(r.title) \(r.detail ?? "")")
+                        try? await Task.sleep(for: .seconds(1))   // let deferred activation run
+                    }
                 } else if case .media(let action, let preferred) = outcome {
                     print("outcome: media \(action.rawValue) preferred=\(preferred ?? "-") \(ms)")
                     if exec {

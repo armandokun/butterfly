@@ -106,6 +106,9 @@ final class NotchModel: ObservableObject {
             case .media(let action, let preferred):
                 let result = await MediaController.perform(action, preferred: preferred)
                 show(.media(result.player, title: result.title, detail: result.detail), for: 2.2)
+            case .settings(let page, let action):
+                let r = SettingsController.perform(page, action: action)
+                show(.media(SettingsController.settingsApp, title: r.title, detail: r.detail), for: 1.8)
             case .unsure(let app): show(.unsure(app))
             case .needAddress: show(.message("Say the full address, like “facebook dot com”"))
             case .notACommand: show(.message("Try “open Safari” or “open facebook.com”"))
