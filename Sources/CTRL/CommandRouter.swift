@@ -7,6 +7,7 @@ struct CommandRouter {
         case media(MediaController.Action, preferred: String?)
         case settings(SettingsController.Page, SettingsController.Action)
         case system(SystemController.Action, level: Int?)
+        case window(WindowCommands.Action, NSRunningApplication)
         case menu(MenuReader.Item, NSRunningApplication)
         case routine(Routine)
         case unsure(best: InstalledApp?)
@@ -21,8 +22,9 @@ struct CommandRouter {
     let client: TypeSafeClient
 
     /// `menu`: the menu bar of the app that was in front when you pressed Option.
+    /// `front`: that app (window commands act on it).
     @MainActor
-    func route(_ transcript: String, menu: MenuReader.Snapshot? = nil) async throws -> Outcome {
+    func route(_ transcript: String, menu: MenuReader.Snapshot? = nil, front: NSRunningApplication? = nil) async throws -> Outcome {
         let catalog = AppCatalog.shared
 
         let normalized = URLExtractor.normalize(transcript)
@@ -57,6 +59,7 @@ struct CommandRouter {
                 "previous_track": "go back to the previous song, or replay the last track",
                 "settings": "open a specific System Settings page, check or change a Mac setting (Wi-Fi, Bluetooth, dark mode, battery, storage, display settings, notifications, privacy, keyboard, updates, etc.)",
                 "system": "change the volume (louder, quieter, mute, unmute) or screen brightness, lock the screen, put the Mac to sleep, turn the display off, take a screenshot, or empty the Trash",
+                "window": "move, snap, resize, center, maximize, minimize, close, or full-screen the current window (or a named app's window), send it to another screen, or hide or quit an app that's already open, or hide all other apps",
                 "none": "anything else, or nothing actionable",
             ]),
             "windows": .choice("How many windows of the same app does the user ask for? Speech-to-text often writes 'two' as 'to' or 'too'.", options: [
@@ -77,6 +80,7 @@ struct CommandRouter {
             "settings_action": SettingsController.actionQuestion,
             "settings_theme": SettingsController.themeQuestion,
             "system_action": SystemController.actionQuestion,
+            "window_action": WindowCommands.question,
             "level": SystemController.levelQuestion,
         ]
         if let q = RoutineStore.shared.question { questions["routine"] = q }
@@ -119,7 +123,7 @@ struct CommandRouter {
         let response = try await client.systemOne(state: state, questions: questions)
 
         if ProcessInfo.processInfo.environment["CTRL_DEBUG"] == "1" {
-            for k in ["intent", "routine", "target1", "windows", "layout", "settings_page", "settings_action", "menu_item", "system_action", "level"] {
+            for k in ["intent", "routine", "target1", "windows", "layout", "settings_page", "settings_action", "menu_item", "system_action", "window_action", "level"] {
                 if let a = response.choice(k) { print("  \(k): \(a.choice) (\(String(format: "%.2f", a.confidence)))") }
             }
             for (q, option) in checks.sorted(by: { $0.key < $1.key }) {
@@ -134,6 +138,14 @@ struct CommandRouter {
         }
         if intent == "menu_command", let menu, let a = response.choice("menu_item"), let item = menuOptions[a.choice] {
             return a.confidence >= 0.4 ? .menu(item, menu.app) : .notACommand
+        }
+        if intent == "window", let a = response.choice("window_action"), let action = WindowCommands.Action(rawValue: a.choice) {
+            // "quit slack" → Slack; "snap this left" → the app in front.
+            let named = mentionedApps.compactMap { app in
+                NSWorkspace.shared.runningApplications.first { $0.bundleURL?.standardizedFileURL == app.url.standardizedFileURL }
+            }.first
+            guard let app = named ?? front ?? menu?.app else { return .notACommand }
+            return .window(action, app)
         }
         if intent == "system", let a = response.choice("system_action"), let action = SystemController.Action(rawValue: a.choice) {
             let jevLevel = response.choice("level").flatMap { $0.choice == "none" ? nil : $0.choice }

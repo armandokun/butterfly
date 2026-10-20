@@ -20,6 +20,7 @@ final class NotchModel: ObservableObject {
 
     private let recorder = SpeechRecorder()
     private var menuSnapshot: MenuReader.Snapshot?
+    private var frontApp: NSRunningApplication?
     private var dismissTask: Task<Void, Never>?
     private var startTask: Task<Void, Never>?
 
@@ -68,7 +69,9 @@ final class NotchModel: ObservableObject {
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
         // Read the front app's menus while you talk, so it costs no time later.
         menuSnapshot = nil
+        frontApp = nil
         if let front = NSWorkspace.shared.frontmostApplication, front.bundleIdentifier != Bundle.main.bundleIdentifier {
+            frontApp = front
             Task { self.menuSnapshot = MenuReader.snapshot(of: front) }
         }
         startTask = Task {
@@ -109,7 +112,7 @@ final class NotchModel: ObservableObject {
         }
         do {
             let router = CommandRouter(client: TypeSafeClient(apiKey: key))
-            let outcome = try await router.route(text, menu: menuSnapshot)
+            let outcome = try await router.route(text, menu: menuSnapshot, front: frontApp)
             if case .routine(let r) = outcome { return await run(r, router: router) }
             await perform(outcome)
         } catch {
@@ -138,6 +141,9 @@ final class NotchModel: ObservableObject {
     private func perform(_ outcome: CommandRouter.Outcome) async {
             switch outcome {
             case .routine: break   // handled by the caller; routines don't nest
+            case .window(let action, let app):
+                let r = await WindowCommands.perform(action, app: app)
+                show(.system(symbol: r.symbol, title: r.title, detail: r.detail), for: 1.4)
             case .system(let action, let level):
                 let r = await SystemController.perform(action, level: level)
                 show(.system(symbol: r.symbol, title: r.title, detail: r.detail), for: action == .screenshotFull ? 0.6 : 1.4)

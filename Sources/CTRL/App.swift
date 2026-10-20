@@ -25,8 +25,10 @@ struct CTRLMain {
         guard let key = Keychain.apiKey else { print("no API key"); exit(1) }
         // CTRL_APP=Dia pretends that app is in front (for menu commands).
         var menu: MenuReader.Snapshot?
+        var front: NSRunningApplication?
         if let name = ProcessInfo.processInfo.environment["CTRL_APP"],
            let app = NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == name }) {
+            front = app
             app.activate(); usleep(400_000)   // like real use: the app is in front
             let t0 = Date()
             menu = MenuReader.snapshot(of: app)
@@ -36,13 +38,20 @@ struct CTRLMain {
         Task {
             let start = Date()
             do {
-                let outcome = try await CommandRouter(client: TypeSafeClient(apiKey: key)).route(text, menu: menu)
+                let outcome = try await CommandRouter(client: TypeSafeClient(apiKey: key)).route(text, menu: menu, front: front)
                 let ms = String(format: "(%.0f ms)", Date().timeIntervalSince(start) * 1000)
                 if case .routine(let r) = outcome {
                     print("outcome: routine \(r.name) \(ms)")
                     for step in r.runnableSteps {
                         let o = try await CommandRouter(client: TypeSafeClient(apiKey: key)).route(step)
                         print("   step “\(step)” →", o)
+                    }
+                } else if case .window(let action, let app) = outcome {
+                    print("outcome: window \(action.rawValue) app=\(app.localizedName ?? "?") \(ms)")
+                    if exec {
+                        let r = await WindowCommands.perform(action, app: app)
+                        print("executed: \(r.title) \(r.detail ?? "")")
+                        try? await Task.sleep(for: .seconds(0.5))
                     }
                 } else if case .system(let action, let level) = outcome {
                     print("outcome: system \(action.rawValue) level=\(level.map(String.init) ?? "-") \(ms)")

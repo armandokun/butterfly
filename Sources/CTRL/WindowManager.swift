@@ -191,14 +191,14 @@ enum WindowManager {
     }
 
     /// AX uses top-left origin relative to the primary screen.
-    private static func setFrame(_ window: AXUIElement, _ frame: CGRect) {
+    static func setFrame(_ window: AXUIElement, _ frame: CGRect) {
         let primaryHeight = NSScreen.screens.first?.frame.height ?? frame.maxY
         var origin = CGPoint(x: frame.minX, y: primaryHeight - frame.maxY)
         var size = frame.size
         guard let pos = AXValueCreate(.cgPoint, &origin), let sz = AXValueCreate(.cgSize, &size) else { return }
-        // Position → size → position again: some apps clamp size to the current screen edge.
-        AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, pos)
+        // Size → position → size: macOS clamps size when a move pushes the window past a screen edge.
         AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sz)
         AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, pos)
+        AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sz)
     }
 }
