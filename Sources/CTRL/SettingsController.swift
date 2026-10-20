@@ -18,7 +18,7 @@ enum SettingsController {
 
     enum Toggle: Equatable { case wifi, darkMode }
 
-    enum Action: String { case open, turnOn = "turn_on", turnOff = "turn_off" }
+    enum Action: String { case open, turnOn = "turn_on", turnOff = "turn_off", auto }
 
     static let pages: [Page] = [
         Page(key: "wifi", title: "Wi-Fi", description: "Wi-Fi, wireless internet, networks to join", paneID: "com.apple.wifi-settings-extension", toggle: .wifi),
@@ -41,7 +41,7 @@ enum SettingsController {
         Page(key: "time_machine", title: "Time Machine", description: "Time Machine, backups", paneID: "com.apple.Time-Machine-Settings.extension"),
         Page(key: "transfer_reset", title: "Transfer or Reset", description: "transfer or reset, erase this Mac, factory reset", paneID: "com.apple.Transfer-Reset-Settings.extension"),
         Page(key: "startup_disk", title: "Startup Disk", description: "startup disk, boot disk", paneID: "com.apple.Startup-Disk-Settings.extension"),
-        Page(key: "appearance", title: "Appearance", description: "appearance, dark mode, light mode, accent color, theme", paneID: "com.apple.Appearance-Settings.extension", toggle: .darkMode),
+        Page(key: "appearance", title: "Appearance", description: "appearance, dark mode, light mode, auto mode, automatic theme by time of day, accent color, theme", paneID: "com.apple.Appearance-Settings.extension", toggle: .darkMode),
         Page(key: "accessibility", title: "Accessibility", description: "accessibility, VoiceOver, zoom, larger text, reduce motion", paneID: "com.apple.Accessibility-Settings.extension"),
         Page(key: "control_center", title: "Control Center", description: "Control Center, menu bar items, battery percentage in menu bar", paneID: "com.apple.ControlCenter-Settings.extension"),
         Page(key: "siri", title: "Apple Intelligence & Siri", description: "Siri, Apple Intelligence, voice assistant", paneID: "com.apple.Siri-Settings.extension"),
@@ -79,7 +79,8 @@ enum SettingsController {
         options: [
             "dark": "dark mode, dark theme, night look",
             "light": "light mode, light theme, bright look",
-            "unspecified": "no dark or light preference mentioned",
+            "auto": "automatic appearance that changes with the time of day, sunset or sunrise, auto mode",
+            "unspecified": "no dark, light, or automatic preference mentioned",
         ]
     )
 
@@ -114,6 +115,11 @@ enum SettingsController {
                 p.waitUntilExit()
                 return Result(title: "Wi-Fi " + (on ? "on" : "off"), detail: nil)
             case .darkMode:
+                if action == .auto {
+                    Appearance.setAutomatic(true)
+                    return Result(title: "Auto appearance", detail: "Light by day, dark at night")
+                }
+                Appearance.setAutomatic(false)   // otherwise sunset flips it back
                 var error: NSDictionary?
                 NSAppleScript(source: "tell application \"System Events\" to tell appearance preferences to set dark mode to \(on)")?
                     .executeAndReturnError(&error)
@@ -135,6 +141,19 @@ enum SettingsController {
     }
 
     static var settingsApp: InstalledApp? { AppCatalog.shared.app(named: "System Settings") }
+
+    /// Auto (time-based) appearance. No public API exists; this uses SkyLight's
+    /// private SLSSetAppearanceThemeSwitchesAutomatically, loaded at runtime so a missing symbol can't crash us.
+    enum Appearance {
+        private typealias Setter = @convention(c) (Bool) -> Void
+        private static let setter: Setter? = {
+            guard let h = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_NOW),
+                  let sym = dlsym(h, "SLSSetAppearanceThemeSwitchesAutomatically") else { return nil }
+            return unsafeBitCast(sym, to: Setter.self)
+        }()
+
+        static func setAutomatic(_ on: Bool) { setter?(on) }
+    }
 
     private static func wifiDevice() -> String? {
         let p = Process()

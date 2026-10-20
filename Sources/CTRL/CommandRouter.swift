@@ -114,6 +114,7 @@ struct CommandRouter {
                 switch response.choice("settings_theme")?.choice {
                 case "dark": action = .turnOn
                 case "light": action = .turnOff
+                case "auto": action = .auto
                 default: break
                 }
             }
