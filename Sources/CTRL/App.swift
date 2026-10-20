@@ -26,6 +26,7 @@ struct CTRLMain {
         // CTRL_APP=Dia pretends that app is in front (for menu commands).
         var menu: MenuReader.Snapshot?
         var front: NSRunningApplication?
+        var elements: [Clicker.Element] = []
         if let name = ProcessInfo.processInfo.environment["CTRL_APP"],
            let app = NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == name }) {
             front = app
@@ -33,14 +34,28 @@ struct CTRLMain {
             let t0 = Date()
             menu = MenuReader.snapshot(of: app)
             print("menu: \(menu?.items.count ?? 0) items read in \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
+            let t1 = Date()
+            elements = ProcessInfo.processInfo.environment["CTRL_VISUAL"] == "1" ? [] : Clicker.elements(of: app)
+            print("clickables: \(elements.count) read in \(Int(Date().timeIntervalSince(t1) * 1000)) ms")
+            if ProcessInfo.processInfo.environment["CTRL_DUMP"] == "2" { elements.forEach { print("   ", $0.role, $0.label) } }
             if ProcessInfo.processInfo.environment["CTRL_DUMP"] == "1" { menu?.items.forEach { print("   ", $0.key, $0.shortcut ?? "") } }
         }
         Task {
             let start = Date()
             do {
-                let outcome = try await CommandRouter(client: TypeSafeClient(apiKey: key)).route(text, menu: menu, front: front)
+                let router = CommandRouter(client: TypeSafeClient(apiKey: key))
+                let outcome = try await router.route(text, menu: menu, front: front, elements: elements)
                 let ms = String(format: "(%.0f ms)", Date().timeIntervalSince(start) * 1000)
-                if case .routine(let r) = outcome {
+                if case .click(let el) = outcome {
+                    print("outcome: click \(el.role) “\(el.label)” at \(el.frame) \(ms)")
+                    if exec { front?.activate(); Clicker.press(el); try? await Task.sleep(for: .seconds(0.8)); print("executed") }
+                } else if case .clickVisual(let app, let what) = outcome {
+                    print("outcome: clickVisual “\(what)” \(ms)")
+                    let t = Date()
+                    let p = try await router.locate(what, in: app)
+                    print("   located: \(p.map { "\($0)" } ?? "not visible") (\(Int(Date().timeIntervalSince(t) * 1000)) ms)")
+                    if exec, let p { app.activate(); try? await Task.sleep(for: .seconds(0.3)); Clicker.click(at: p); print("executed") }
+                } else if case .routine(let r) = outcome {
                     print("outcome: routine \(r.name) \(ms)")
                     for step in r.runnableSteps {
                         let o = try await CommandRouter(client: TypeSafeClient(apiKey: key)).route(step)

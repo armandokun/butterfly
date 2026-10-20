@@ -21,6 +21,8 @@ final class NotchModel: ObservableObject {
     private let recorder = SpeechRecorder()
     private var menuSnapshot: MenuReader.Snapshot?
     private var frontApp: NSRunningApplication?
+    private var clickables: [Clicker.Element] = []
+    private var router: CommandRouter? { Keychain.apiKey.map { CommandRouter(client: TypeSafeClient(apiKey: $0)) } }
     private var dismissTask: Task<Void, Never>?
     private var startTask: Task<Void, Never>?
 
@@ -70,9 +72,13 @@ final class NotchModel: ObservableObject {
         // Read the front app's menus while you talk, so it costs no time later.
         menuSnapshot = nil
         frontApp = nil
+        clickables = []
         if let front = NSWorkspace.shared.frontmostApplication, front.bundleIdentifier != Bundle.main.bundleIdentifier {
             frontApp = front
-            Task { self.menuSnapshot = MenuReader.snapshot(of: front) }
+            Task {
+                self.menuSnapshot = MenuReader.snapshot(of: front)
+                self.clickables = Clicker.elements(of: front)
+            }
         }
         startTask = Task {
             do { try await recorder.start() }
@@ -112,7 +118,7 @@ final class NotchModel: ObservableObject {
         }
         do {
             let router = CommandRouter(client: TypeSafeClient(apiKey: key))
-            let outcome = try await router.route(text, menu: menuSnapshot, front: frontApp)
+            let outcome = try await router.route(text, menu: menuSnapshot, front: frontApp, elements: clickables)
             if case .routine(let r) = outcome { return await run(r, router: router) }
             await perform(outcome)
         } catch {
@@ -141,6 +147,26 @@ final class NotchModel: ObservableObject {
     private func perform(_ outcome: CommandRouter.Outcome) async {
             switch outcome {
             case .routine: break   // handled by the caller; routines don't nest
+            case .click(let el):
+                frontApp?.activate()
+                Clicker.press(el)
+                show(.system(symbol: "cursorarrow.click", title: "Clicked", detail: el.label), for: 1.2)
+            case .clickVisual(let app, let what):
+                show(.system(symbol: "eye", title: "Looking…", detail: what), for: 15)
+                app.activate()
+                guard let router else { return }
+                do {
+                    if let p = try await router.locate(what, in: app) {
+                        Clicker.click(at: p)
+                        show(.system(symbol: "cursorarrow.click", title: "Clicked", detail: what), for: 1.2)
+                    } else {
+                        show(.system(symbol: "eye.slash", title: "Couldn't find it", detail: what), for: 1.8)
+                    }
+                } catch {
+                    let denied = !CGPreflightScreenCaptureAccess()
+                    if denied { CGRequestScreenCaptureAccess() }
+                    show(.message(denied ? "Allow Screen Recording for CTRL" : error.localizedDescription), for: 2.5)
+                }
             case .window(let action, let app):
                 let r = await WindowCommands.perform(action, app: app)
                 show(.system(symbol: r.symbol, title: r.title, detail: r.detail), for: 1.4)

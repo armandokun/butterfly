@@ -8,6 +8,8 @@ struct CommandRouter {
         case settings(SettingsController.Page, SettingsController.Action)
         case system(SystemController.Action, level: Int?)
         case window(WindowCommands.Action, NSRunningApplication)
+        case click(Clicker.Element)
+        case clickVisual(NSRunningApplication, what: String)   // not in the accessibility tree: find it on a screenshot
         case menu(MenuReader.Item, NSRunningApplication)
         case routine(Routine)
         case unsure(best: InstalledApp?)
@@ -23,8 +25,9 @@ struct CommandRouter {
 
     /// `menu`: the menu bar of the app that was in front when you pressed Option.
     /// `front`: that app (window commands act on it).
+    /// `elements`: clickable things in its window, read while you spoke.
     @MainActor
-    func route(_ transcript: String, menu: MenuReader.Snapshot? = nil, front: NSRunningApplication? = nil) async throws -> Outcome {
+    func route(_ transcript: String, menu: MenuReader.Snapshot? = nil, front: NSRunningApplication? = nil, elements: [Clicker.Element] = []) async throws -> Outcome {
         let catalog = AppCatalog.shared
 
         let normalized = URLExtractor.normalize(transcript)
@@ -60,6 +63,7 @@ struct CommandRouter {
                 "settings": "open a specific System Settings page, check or change a Mac setting (Wi-Fi, Bluetooth, dark mode, battery, storage, display settings, notifications, privacy, keyboard, updates, etc.)",
                 "system": "change the volume (louder, quieter, mute, unmute) or screen brightness, lock the screen, put the Mac to sleep, turn the display off, take a screenshot, or empty the Trash",
                 "window": "move, snap, resize, center, maximize, minimize, close, or full-screen the current window (or a named app's window), send it to another screen, or hide or quit an app that's already open, or hide all other apps",
+                "click": "click, press, tap, or select something visible on screen in the current app: a button, link, tab, field, message, or item (e.g. 'click send', 'press the blue button', 'click the first result', 'click on the search field')",
                 "none": "anything else, or nothing actionable",
             ]),
             "windows": .choice("How many windows of the same app does the user ask for? Speech-to-text often writes 'two' as 'to' or 'too'.", options: [
@@ -84,6 +88,17 @@ struct CommandRouter {
             "level": SystemController.levelQuestion,
         ]
         if let q = RoutineStore.shared.question { questions["routine"] = q }
+
+        // Click branch: the window's own buttons/links are the options.
+        var clickOptions: [String: Clicker.Element] = [:]
+        if !elements.isEmpty {
+            var opts = ["none": "none of these is what the user wants to click"]
+            for (key, (desc, el)) in Clicker.options(elements, for: transcript) {
+                clickOptions[key] = el
+                opts[key] = desc
+            }
+            questions["click_target"] = .choice("Which on-screen element does the user want to click?", options: opts)
+        }
 
         // Menu branch: the front app's own menu items are the options.
         var menuOptions: [String: MenuReader.Item] = [:]
@@ -123,7 +138,7 @@ struct CommandRouter {
         let response = try await client.systemOne(state: state, questions: questions)
 
         if ProcessInfo.processInfo.environment["CTRL_DEBUG"] == "1" {
-            for k in ["intent", "routine", "target1", "windows", "layout", "settings_page", "settings_action", "menu_item", "system_action", "window_action", "level"] {
+            for k in ["intent", "routine", "target1", "windows", "layout", "settings_page", "settings_action", "menu_item", "system_action", "window_action", "click_target", "level"] {
                 if let a = response.choice(k) { print("  \(k): \(a.choice) (\(String(format: "%.2f", a.confidence)))") }
             }
             for (q, option) in checks.sorted(by: { $0.key < $1.key }) {
@@ -138,6 +153,11 @@ struct CommandRouter {
         }
         if intent == "menu_command", let menu, let a = response.choice("menu_item"), let item = menuOptions[a.choice] {
             return a.confidence >= 0.4 ? .menu(item, menu.app) : .notACommand
+        }
+        if intent == "click" {
+            if let a = response.choice("click_target"), a.choice != "none", a.confidence >= 0.5, let el = clickOptions[a.choice] { return .click(el) }
+            guard let app = front ?? menu?.app else { return .notACommand }
+            return .clickVisual(app, what: transcript)
         }
         if intent == "window", let a = response.choice("window_action"), let action = WindowCommands.Action(rawValue: a.choice) {
             // "quit slack" → Slack; "snap this left" → the app in front.
@@ -214,6 +234,26 @@ struct CommandRouter {
     }
 
     /// Is this app name (or one of its words, 3+ letters) in the spoken text?
+    /// Second step for clicks not in the accessibility tree: screenshot + Jev Box.
+    /// Returns a global (top-left origin) point, or nil when Jev says it isn't visible.
+    @MainActor
+    func locate(_ what: String, in app: NSRunningApplication) async throws -> CGPoint? {
+        guard let shot = try await Clicker.screenshot(of: app) else { return nil }
+        let ref = "img-" + UUID().uuidString
+        let response = try await client.systemOne(
+            state: ["screen": ref, "spoken_command": what],
+            questions: [
+                "target": .box("the on-screen element in `screen` that the user wants to click, per `spoken_command`"),
+                "visible": .noul("Is the thing the user wants to click (per `spoken_command`) visible in `screen`?"),
+            ],
+            images: [.init(ref: ref, jpeg: shot.jpeg)])
+        if ProcessInfo.processInfo.environment["CTRL_DEBUG"] == "1", let b = response.box("target") {
+            print("  box: \(b.box) conf=\(String(format: "%.2f", b.confidence)) visible=\(response.noul("visible") ?? -1)")
+        }
+        guard let b = response.box("target"), (response.noul("visible") ?? 0) >= 0.5 else { return nil }
+        return Clicker.point(in: shot, box: b.box)
+    }
+
     private static func mentions(_ spoken: String, _ name: String) -> Bool {
         let words = Set(spoken.split { !$0.isLetter && !$0.isNumber }.map(String.init))
         let nameWords = name.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init)
