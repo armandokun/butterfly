@@ -40,7 +40,7 @@ struct CTRLMain {
                 let ms = String(format: "(%.0f ms)", Date().timeIntervalSince(start) * 1000)
                 if case .routine(let r) = outcome {
                     print("outcome: routine \(r.name) \(ms)")
-                    for step in r.steps {
+                    for step in r.runnableSteps {
                         let o = try await CommandRouter(client: TypeSafeClient(apiKey: key)).route(step)
                         print("   step “\(step)” →", o)
                     }
@@ -82,6 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let hotkey = HotkeyMonitor()
     private var panel: NotchPanel?
     private var statusItem: NSStatusItem?
+    private let routinesWindow = RoutinesWindow()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppCatalog.shared.reload()
@@ -96,6 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkey.start()
 
         setUpMenu()
+        if CommandLine.arguments.contains("--routines") { editRoutines() }
 
         if ProcessInfo.processInfo.environment["CTRL_DEMO"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.model.runDemo() }
@@ -132,7 +134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         menu.addItem(withTitle: "Set TypeSafe API Key…", action: #selector(setKey), keyEquivalent: "")
         menu.addItem(withTitle: "Edit Vocabulary…", action: #selector(editVocabulary), keyEquivalent: "")
-        menu.addItem(withTitle: "Edit Routines…", action: #selector(editRoutines), keyEquivalent: "")
+        menu.addItem(withTitle: "Routines…", action: #selector(editRoutines), keyEquivalent: "")
         menu.addItem(withTitle: "Rescan Apps", action: #selector(rescan), keyEquivalent: "")
         menu.addItem(withTitle: "Accessibility Settings…", action: #selector(openAccessibility), keyEquivalent: "")
         menu.addItem(.separator())
@@ -167,7 +169,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func rescan() { AppCatalog.shared.reload() }
 
     @objc private func editVocabulary() { Vocabulary.open() }
-    @objc private func editRoutines() { Routines.open() }
+    @objc private func editRoutines() { routinesWindow.show { [weak self] in self?.model.run($0) } }
 
     @objc private func openAccessibility() {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)

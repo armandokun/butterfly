@@ -7,7 +7,7 @@ struct CommandRouter {
         case media(MediaController.Action, preferred: String?)
         case settings(SettingsController.Page, SettingsController.Action)
         case menu(MenuReader.Item, NSRunningApplication)
-        case routine(Routines.Routine)
+        case routine(Routine)
         case unsure(best: InstalledApp?)
         case needAddress
         case notACommand
@@ -75,7 +75,7 @@ struct CommandRouter {
             "settings_action": SettingsController.actionQuestion,
             "settings_theme": SettingsController.themeQuestion,
         ]
-        if let q = Routines.question { questions["routine"] = q }
+        if let q = RoutineStore.shared.question { questions["routine"] = q }
 
         // Menu branch: the front app's own menu items are the options.
         var menuOptions: [String: MenuReader.Item] = [:]
@@ -125,7 +125,7 @@ struct CommandRouter {
 
         let intent = response.choice("intent")?.choice
         // Routines first: your own phrases beat generic intents.
-        if let r = response.choice("routine"), r.choice != "none", r.confidence >= 0.6, let routine = Routines.routine(named: r.choice) {
+        if let r = response.choice("routine"), r.choice != "none", r.confidence >= 0.6, let routine = RoutineStore.shared.routine(named: r.choice) {
             return .routine(routine)
         }
         if intent == "menu_command", let menu, let a = response.choice("menu_item"), let item = menuOptions[a.choice] {

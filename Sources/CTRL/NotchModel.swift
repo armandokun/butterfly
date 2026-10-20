@@ -109,21 +109,29 @@ final class NotchModel: ObservableObject {
         do {
             let router = CommandRouter(client: TypeSafeClient(apiKey: key))
             let outcome = try await router.route(text, menu: menuSnapshot)
-            if case .routine(let r) = outcome {
-                // Each step is a normal command: route it, run it, give apps a moment to appear.
-                for (i, step) in r.steps.enumerated() {
-                    show(.media(nil, title: r.name, detail: "\(i + 1)/\(r.steps.count) · \(step)"), for: 30)
-                    if let o = try? await router.route(step) { await perform(o) }
-                    try? await Task.sleep(for: .seconds(1.2))
-                }
-                show(.media(nil, title: r.name, detail: "done"), for: 1.4)
-                return
-            }
+            if case .routine(let r) = outcome { return await run(r, router: router) }
             await perform(outcome)
         } catch {
             if let app = AppCatalog.shared.localMatch(text) { return launch(app) }
             show(.message(error.localizedDescription))
         }
+    }
+
+    /// Runs a routine (from voice or the Routines window's Run Now).
+    func run(_ r: Routine) {
+        guard let key = Keychain.apiKey else { return show(.message("Add your TypeSafe key from the menu bar")) }
+        Task { await run(r, router: CommandRouter(client: TypeSafeClient(apiKey: key))) }
+    }
+
+    private func run(_ r: Routine, router: CommandRouter) async {
+        // Each step is a normal command: route it, run it, give apps a moment to appear.
+        let steps = r.runnableSteps
+        for (i, step) in steps.enumerated() {
+            show(.media(nil, title: r.name, detail: "\(i + 1)/\(steps.count) · \(step)"), for: 30)
+            if let o = try? await router.route(step) { await perform(o) }
+            try? await Task.sleep(for: .seconds(1.2))
+        }
+        show(.media(nil, title: r.name, detail: "done"), for: 1.4)
     }
 
     private func perform(_ outcome: CommandRouter.Outcome) async {
