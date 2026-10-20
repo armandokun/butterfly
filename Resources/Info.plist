@@ -26,5 +26,11 @@
     <string>CTRL transcribes your voice on-device to understand your command.</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>CTRL opens websites in new browser windows so it can place them side by side.</string>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>CTRL connects your Bluetooth devices by voice and shows their battery in the notch.</string>
+    <key>NSLocationUsageDescription</key>
+    <string>macOS only shares the Wi-Fi network name with apps that have Location access. CTRL uses it to show which network you joined.</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>macOS only shares the Wi-Fi network name with apps that have Location access. CTRL uses it to show which network you joined.</string>
 </dict>
 </plist>

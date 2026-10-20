@@ -37,6 +37,7 @@ final class NowPlaying: ObservableObject {
 
     private var process: Process?
     private var buffer = Data()
+    private static var cleaned = false
 
     private static var adapter: (script: String, framework: String)? {
         let dirs = [Bundle.main.resourceURL?.appendingPathComponent("MediaRemoteAdapter"),
@@ -51,6 +52,15 @@ final class NowPlaying: ObservableObject {
 
     func start() {
         guard process == nil, let a = Self.adapter else { return }
+        if !Self.cleaned {
+            // A crashed/killed CTRL leaves its helper behind: clear those once.
+            Self.cleaned = true
+            let k = Process(); k.executableURL = URL(fileURLWithPath: "/usr/bin/pkill"); k.arguments = ["-f", "mediaremote-adapter.pl"]
+            try? k.run(); k.waitUntilExit()
+            NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.process?.terminationHandler = nil; self?.process?.terminate() }
+            }
+        }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
         p.arguments = [a.script, a.framework, "stream", "--no-diff", "--debounce=150"]

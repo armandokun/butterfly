@@ -17,6 +17,7 @@ final class NotchModel: ObservableObject {
         case level(LevelKind, Int)   // compact HUD beside the notch
         case nowPlaying              // expanded player card (the compact one shows whenever music plays)
         case timerDone(String)       // expanded "Timer done" alert
+        case badge(symbol: String, text: String, tint: Color)   // compact: icon left, short text right
     }
 
     /// Background events (volume keys, battery, Wi-Fi…): only when the notch isn't busy with you.
@@ -44,6 +45,27 @@ final class NotchModel: ObservableObject {
             // Always shown, even mid-command: it's what you asked for.
             self?.show(.timerDone(t.label ?? Timers.spoken(t.total) + " timer"), for: 6)
         }
+        WiFi.shared.onChange = { [weak self] ssid, on in
+            if !on { self?.ambient(.badge(symbol: "wifi.slash", text: "Wi-Fi off", tint: .white.opacity(0.6))) }
+            else if let ssid { self?.ambient(.badge(symbol: "wifi", text: ssid, tint: .blue)) }
+            else { self?.ambient(.badge(symbol: "wifi.exclamationmark", text: "Disconnected", tint: .orange)) }
+        }
+        WiFi.shared.start()
+        Bluetooth.shared.onChange = { [weak self] name, symbol, battery, connected in
+            let text = connected ? (battery.map { "\($0)%" } ?? "Connected") : "Disconnected"
+            let tint: Color = !connected ? .white.opacity(0.6) : (battery ?? 100) <= 20 ? .red : .green
+            self?.ambient(.badge(symbol: symbol, text: text, tint: tint), for: 2.2)
+            Memory.record(said: "(automatic)", did: "\(name) \(connected ? "connected" : "disconnected")" + (battery.map { ", battery \($0)%" } ?? ""))
+        }
+        Bluetooth.shared.start()
+        FileDrops.shared.onNew = { [weak self] kind, url in
+            let what = kind == .download ? "Downloaded" : "Screenshot saved"
+            self?.ambient(.media(InstalledApp(name: url.lastPathComponent, url: url), title: url.lastPathComponent,
+                                 detail: "\(what) · say “open it”"), for: 3)
+            // So "open it" / "show it in Finder" right after works.
+            Memory.record(said: "(automatic)", did: "\(kind == .download ? "new download" : "new screenshot"): \(url.path)")
+        }
+        FileDrops.shared.start()
     }
 
     @Published var phase: Phase = .idle
@@ -62,7 +84,7 @@ final class NotchModel: ObservableObject {
 
     /// Short-term memory entry: what you said, what CTRL did, where.
     private func remember(_ said: String, _ outcome: CommandRouter.Outcome) {
-        let did: String
+        var did: String
         switch phase {
         case .opened(let targets, _): did = "opened " + targets.map { t in
             switch t { case .app(let a): a.name; case .site(let u): u.host() ?? u.absoluteString } }.joined(separator: ", ")
@@ -71,6 +93,10 @@ final class NotchModel: ObservableObject {
         case .level(let k, let v): did = "\(k == .volume ? "volume" : "brightness") set to \(v)%"
         case .nowPlaying: did = NowPlaying.shared.track.map { "now playing: \($0.title)" + ($0.artist.map { " by \($0)" } ?? "") + ($0.playing ? "" : " (paused)") } ?? "music"
         case .timerDone(let l): did = "\(l) finished"
+        case .badge(_, let text, _): did = text
+            if case .focus(let m) = outcome { did = m == "off" ? "Focus turned off" : "\(m) Focus turned on" }
+            if case .bluetooth(let n, _, let c) = outcome { did = "\(n) \(c ? "connected" : "disconnected") (\(text))" }
+            if case .joinWiFi(let n) = outcome { did = "joined Wi-Fi \(n)" }
         default:
             switch outcome {
             case .type(let t, _), .continueTyping(let t): did = "typed “\(t.prefix(60))”"
@@ -427,6 +453,27 @@ final class NotchModel: ObservableObject {
                     if let t = timers.next { show(.system(symbol: "timer", title: "\(Timers.spoken(t.remaining)) left", detail: "Ends at \(t.ends.formatted(date: .omitted, time: .shortened))"), for: 2) }
                     else { show(.system(symbol: "timer", title: "No timer running", detail: nil), for: 1.4) }
                 }
+            case .focus(let mode):
+                if !Focus.isInstalled {
+                    show(.system(symbol: "moon.fill", title: "One-time setup", detail: "Click “Add Shortcut”, then say it again"), for: 4)
+                    await Focus.install()
+                    break
+                }
+                let ok = await Focus.set(mode)
+                let off = mode == "off"
+                if ok { show(.badge(symbol: Focus.symbol(for: off ? nil : mode), text: off ? "Focus off" : mode, tint: off ? .white.opacity(0.6) : .indigo), for: 1.8) }
+                else { show(.message("Couldn't change Focus"), for: 2) }
+            case .bluetooth(let name, let address, let connect):
+                show(.system(symbol: Bluetooth.symbol(for: name), title: (connect ? "Connecting " : "Disconnecting ") + name + "…", detail: nil), for: 10)
+                let ok = await Bluetooth.shared.connect(address, on: connect)
+                if !ok { show(.message("Couldn't \(connect ? "connect" : "disconnect") \(name)"), for: 2); break }
+                let battery = connect ? await Bluetooth.battery(of: name) : nil
+                show(.badge(symbol: Bluetooth.symbol(for: name), text: connect ? (battery.map { "\($0)%" } ?? "Connected") : "Disconnected",
+                            tint: connect ? ((battery ?? 100) <= 20 ? .red : .green) : .white.opacity(0.6)), for: 2)
+            case .joinWiFi(let name):
+                show(.system(symbol: "wifi", title: "Joining \(name)…", detail: nil), for: 15)
+                let ok = await WiFi.shared.join(name)
+                show(ok ? .badge(symbol: "wifi", text: name, tint: .blue) : .message("Couldn't join \(name)"), for: 2)
             case .system(let action, let level):
                 let r = await SystemController.perform(action, level: level)
                 if let l = r.level { show(.level(l.kind, l.value), for: 1.6); break }

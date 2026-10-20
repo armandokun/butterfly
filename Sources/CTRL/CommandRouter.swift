@@ -8,6 +8,9 @@ struct CommandRouter {
         case settings(SettingsController.Page, SettingsController.Action)
         case system(SystemController.Action, level: Int?)
         case timer(Timers.Action, seconds: TimeInterval?)
+        case focus(String)                       // mode name, or "off"
+        case bluetooth(name: String, address: String, connect: Bool)
+        case joinWiFi(String)
         case window(WindowCommands.Action, NSRunningApplication)
         case click(Clicker.Element)
         case file(URL, reveal: Bool)
@@ -74,6 +77,8 @@ struct CommandRouter {
                 "previous_track": "go back to the previous song, or replay the last track",
                 "now_playing": "ask what song/track is playing, who sings this, or to show the music player / now playing",
                 "timer": "set, start, cancel, or check a timer / countdown (e.g. 'set a timer for 5 minutes', 'how long is left on my timer', 'remind me in 10 minutes')",
+                "focus": "turn a Focus mode on or off: Do Not Disturb, Work, Sleep, Personal, Gaming… ('don't disturb me', 'focus mode', 'turn off do not disturb')",
+                "connect": "connect or disconnect a specific Bluetooth device (AirPods, headphones, speaker, keyboard, controller) or join a specific Wi-Fi network by name",
                 "settings": "open a specific System Settings page, check or change a Mac setting (Wi-Fi, Bluetooth, dark mode, battery, storage, display settings, notifications, privacy, keyboard, updates, etc.)",
                 "system": "change the volume (louder, quieter, mute, unmute) or screen brightness, lock the screen, put the Mac to sleep, turn the display off, take a screenshot, or empty the Trash",
                 "window": "move, snap, resize, center, maximize, minimize, close, or full-screen the current window (or a named app's window), send it to another screen, or hide or quit an app that's already open, or hide all other apps",
@@ -149,6 +154,26 @@ struct CommandRouter {
             }
         }
 
+        // Focus / connect branches: your own modes, devices, and networks are the options.
+        let focusModes = Focus.modes
+        var fm = ["off": "turn Focus / Do Not Disturb off, stop focusing, allow notifications again"]
+        for m in focusModes { fm[m.name] = "the \(m.name) Focus mode" }
+        questions["focus_mode"] = .choice("Which Focus mode does the user want turned on, or off?", options: fm)
+        var connectOptions: [String: String] = [:]
+        var co: [String: String] = [:]
+        for d in Bluetooth.shared.paired.prefix(60) {
+            let k = "bt:" + d.address; connectOptions[k] = d.name
+            co[k] = "the Bluetooth device “\(d.name)”" + (d.connected ? " (connected now)" : "")
+        }
+        for n in WiFi.shared.known.prefix(60) {
+            let k = "wifi:" + n; connectOptions[k] = n
+            co[k] = "the Wi-Fi network “\(n)”"
+        }
+        if !co.isEmpty {
+            questions["connect_target"] = .choice("Which Bluetooth device or Wi-Fi network does the user mean? Speech-to-text may misspell names (e.g. 'air pods').", options: co)
+            questions["connect_on"] = .noul("Does the user want to connect (yes) rather than disconnect (no)?")
+        }
+
         // Every other plausible item gets its own yes/no question (parallel, independent).
         // Ordinal "second/third" slots don't work: the model repeats the first item.
         let spoken = normalized
@@ -176,7 +201,7 @@ struct CommandRouter {
         let response = try await client.systemOne(state: state, questions: questions)
 
         if ProcessInfo.processInfo.environment["CTRL_DEBUG"] == "1" {
-            for k in ["intent", "routine", "target1", "windows", "layout", "settings_page", "settings_action", "menu_item", "system_action", "timer_action", "timer_duration", "window_action", "click_target", "files_action", "folder", "level"] {
+            for k in ["intent", "routine", "target1", "windows", "layout", "settings_page", "settings_action", "menu_item", "system_action", "timer_action", "timer_duration", "focus_mode", "connect_target", "window_action", "click_target", "files_action", "folder", "level"] {
                 if let a = response.choice(k) { print("  \(k): \(a.choice) (\(String(format: "%.2f", a.confidence)))") }
             }
             for (q, option) in checks.sorted(by: { $0.key < $1.key }) {
@@ -243,6 +268,13 @@ struct CommandRouter {
             } : nil
             guard let app = named ?? remembered ?? front ?? menu?.app else { return .notACommand }
             return .window(action, app)
+        }
+        if intent == "focus", let m = response.choice("focus_mode") {
+            return .focus(m.choice)
+        }
+        if intent == "connect", let t = response.choice("connect_target"), let name = connectOptions[t.choice] {
+            if t.choice.hasPrefix("wifi:") { return .joinWiFi(name) }
+            return .bluetooth(name: name, address: String(t.choice.dropFirst(3)), connect: (response.noul("connect_on") ?? 1) >= 0.5)
         }
         if intent == "timer" {
             let action = response.choice("timer_action").flatMap { Timers.Action(rawValue: $0.choice) } ?? .start

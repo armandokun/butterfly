@@ -14,6 +14,7 @@ struct NotchView: View {
         case .idle: playingIdle || timerIdle ? .compact : .closed
         case .listening where model.transcript.isEmpty: .compact   // just widen beside the notch
         case .level: .compact
+        case .badge: .compact
         default: .expanded
         }
     }
@@ -24,6 +25,7 @@ struct NotchView: View {
 
     private var compactExtra: CGFloat {
         if case .level = model.phase { return 150 }
+        if case .badge(_, let text, _) = model.phase { return min(260, 70 + CGFloat(text.count) * 7.5 * 2) }
         if timerIdle { return 110 }
         return playingIdle ? 80 : 92
     }
@@ -93,6 +95,7 @@ struct NotchView: View {
 
     private var compactKind: String {
         if case .level = model.phase { return "level" }
+        if case .badge(let s, _, _) = model.phase { return "badge-\(s)" }
         if timerIdle { return "timer" }
         return playingIdle ? "music" : "listen"
     }
@@ -119,6 +122,14 @@ struct NotchView: View {
                     Spacer(minLength: 0)
                     Equalizer(playing: t.playing)
                 }
+            case .badge(let symbol, let text, let tint):
+                Image(systemName: symbol)
+                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(tint)
+                    .frame(width: 22, alignment: .leading)
+                Spacer(minLength: 0)
+                Text(text).font(.system(size: 12, weight: .semibold)).foregroundStyle(tint)
+                    .lineLimit(1).truncationMode(.tail)
+                    .frame(maxWidth: compactExtra / 2 - 18, alignment: .trailing)
             case .level(let kind, let v):
                 Image(systemName: kind.symbol(for: v))
                     .font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
@@ -200,6 +211,8 @@ struct NotchView: View {
             EmptyView()
         case .timerDone:
             Image(systemName: "timer").font(.system(size: 20, weight: .semibold)).foregroundStyle(.orange)
+        case .badge(let s, _, let tint):
+            Image(systemName: s).font(.system(size: 18, weight: .semibold)).foregroundStyle(tint)
         case .idle:
             EmptyView()
         }
@@ -224,6 +237,7 @@ struct NotchView: View {
         case .level(let k, let v): "\(k == .volume ? "Volume" : "Brightness") \(v)%"
         case .nowPlaying: music.track?.title ?? ""
         case .timerDone: "Time’s up"
+        case .badge(_, let text, _): text
         case .idle: ""
         }
     }

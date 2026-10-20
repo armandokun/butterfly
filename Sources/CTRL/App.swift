@@ -23,6 +23,7 @@ struct CTRLMain {
         AppCatalog.shared.reload()
         print("sites:", URLExtractor.candidates(in: text))
         guard let key = Keychain.apiKey else { print("no API key"); exit(1) }
+        Bluetooth.shared.refreshNow()
         // CTRL_MEMORY="said|did|app;said|did|app" pretends these happened just now.
         if let mem = ProcessInfo.processInfo.environment["CTRL_MEMORY"] {
             for e in mem.split(separator: ";") {
@@ -149,6 +150,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setUpMenu()
         if CommandLine.arguments.contains("--routines") { editRoutines() }
 
+        if let b = ProcessInfo.processInfo.environment["CTRL_BADGE"]?.split(separator: "|").map(String.init), b.count == 2 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.model.ambient(.badge(symbol: b[0], text: b[1], tint: .green), for: 4) }
+        }
         if let s = ProcessInfo.processInfo.environment["CTRL_TIMER"].flatMap(Double.init) {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { _ = Timers.shared.start(s) }
         }
