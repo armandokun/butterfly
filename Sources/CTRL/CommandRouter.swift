@@ -63,7 +63,7 @@ struct CommandRouter {
                 "settings": "open a specific System Settings page, check or change a Mac setting (Wi-Fi, Bluetooth, dark mode, battery, storage, display settings, notifications, privacy, keyboard, updates, etc.)",
                 "system": "change the volume (louder, quieter, mute, unmute) or screen brightness, lock the screen, put the Mac to sleep, turn the display off, take a screenshot, or empty the Trash",
                 "window": "move, snap, resize, center, maximize, minimize, close, or full-screen the current window (or a named app's window), send it to another screen, or hide or quit an app that's already open, or hide all other apps",
-                "click": "click, press, tap, or select something visible on screen in the current app: a button, link, tab, field, message, or item (e.g. 'click send', 'press the blue button', 'click the first result', 'click on the search field')",
+                "click": "click, press, tap, or select something visible on screen: a button, link, tab, field, message, item, desktop widget, Dock icon, or menu bar icon (e.g. 'click send', 'press the blue button', 'click the first result', 'click the weather widget')",
                 "none": "anything else, or nothing actionable",
             ]),
             "windows": .choice("How many windows of the same app does the user ask for? Speech-to-text often writes 'two' as 'to' or 'too'.", options: [
@@ -92,12 +92,12 @@ struct CommandRouter {
         // Click branch: the window's own buttons/links are the options.
         var clickOptions: [String: Clicker.Element] = [:]
         if !elements.isEmpty {
-            var opts = ["none": "none of these is what the user wants to click"]
+            var opts = ["none": "none of these: the thing to click is somewhere else on screen (desktop widget, Dock, menu bar, another window) or not in this list"]
             for (key, (desc, el)) in Clicker.options(elements, for: transcript) {
                 clickOptions[key] = el
                 opts[key] = desc
             }
-            questions["click_target"] = .choice("Which on-screen element does the user want to click?", options: opts)
+            questions["click_target"] = .choice("Which element of the front app's window (\(front?.localizedName ?? "current app")) does the user want to click?", options: opts)
         }
 
         // Menu branch: the front app's own menu items are the options.
@@ -243,7 +243,7 @@ struct CommandRouter {
         let response = try await client.systemOne(
             state: ["screen": ref, "spoken_command": what],
             questions: [
-                "target": .box("the on-screen element in `screen` that the user wants to click, per `spoken_command`"),
+                "target": .box("the on-screen element in `screen` that the user wants to click, per `spoken_command`. `screen` is the whole display: windows, desktop widgets, Dock, and menu bar"),
                 "visible": .noul("Is the thing the user wants to click (per `spoken_command`) visible in `screen`?"),
             ],
             images: [.init(ref: ref, jpeg: shot.jpeg)])
