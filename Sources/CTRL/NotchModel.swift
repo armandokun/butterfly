@@ -7,7 +7,7 @@ final class NotchModel: ObservableObject {
         case idle
         case listening
         case thinking
-        case opened(InstalledApp)
+        case opened([InstalledApp], detail: String?)
         case openedSite(URL)
         case unsure(InstalledApp?)
         case message(String)
@@ -48,7 +48,9 @@ final class NotchModel: ObservableObject {
             }
             phase = .thinking
             try? await Task.sleep(for: .seconds(1.2))
-            if let safari { phase = .opened(safari) }
+            if let safari, let slack = AppCatalog.shared.app(named: "Slack") {
+                phase = .opened([safari, slack], detail: "side by side")
+            }
             try? await Task.sleep(for: .seconds(1.5))
             close()
         }
@@ -99,7 +101,7 @@ final class NotchModel: ObservableObject {
         }
         do {
             switch try await CommandRouter(client: TypeSafeClient(apiKey: key)).route(text) {
-            case .openApp(let app): launch(app)
+            case .openApps(let plan): launch(plan)
             case .openSite(let url): openSite(url)
             case .unsure(let app): show(.unsure(app))
             case .needAddress: show(.message("Say the full address, like “facebook dot com”"))
@@ -117,8 +119,24 @@ final class NotchModel: ObservableObject {
     }
 
     private func launch(_ app: InstalledApp) {
-        NSWorkspace.shared.openApplication(at: app.url, configuration: .init())
-        show(.opened(app))
+        launch(.init(apps: [app], windowsEach: 1, layout: .none))
+    }
+
+    private func launch(_ plan: WindowManager.Plan) {
+        show(.opened(plan.apps, detail: Self.describe(plan)), for: 2.2)
+        Task { await WindowManager.run(plan) }
+    }
+
+    private static func describe(_ plan: WindowManager.Plan) -> String? {
+        var parts: [String] = []
+        if plan.apps.count == 1, plan.windowsEach > 1 { parts.append("\(plan.windowsEach) windows") }
+        switch plan.layout {
+        case .sideBySide: parts.append("side by side")
+        case .stacked: parts.append("stacked")
+        case .maximize: parts.append("maximized")
+        case .none: if plan.apps.count == 1, plan.windowsEach > 1 { parts.append("side by side") }
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     private func show(_ phase: Phase, for seconds: Double = 1.6) {

@@ -16,7 +16,10 @@ struct CTRLMain {
     }
 
     /// Debug: `CTRL --route "open facebook dot com"` prints what would happen, opens nothing.
+    /// Add `--exec` to actually run it.
     @MainActor static func routeFromCLI(_ text: String) {
+        let exec = CommandLine.arguments.contains("--exec")
+        let text = text.replacingOccurrences(of: "--exec", with: "").trimmingCharacters(in: .whitespaces)
         AppCatalog.shared.reload()
         print("sites:", URLExtractor.candidates(in: text))
         guard let key = Keychain.apiKey else { print("no API key"); exit(1) }
@@ -24,7 +27,13 @@ struct CTRLMain {
             let start = Date()
             do {
                 let outcome = try await CommandRouter(client: TypeSafeClient(apiKey: key)).route(text)
-                print("outcome:", outcome, String(format: "(%.0f ms)", Date().timeIntervalSince(start) * 1000))
+                let ms = String(format: "(%.0f ms)", Date().timeIntervalSince(start) * 1000)
+                if case .openApps(let p) = outcome {
+                    print("outcome: open \(p.apps.map(\.name)) windows=\(p.windowsEach) layout=\(p.layout.rawValue) \(ms)")
+                    if exec { await WindowManager.run(p); print("executed, AX trusted:", HotkeyMonitor.hasAccessibility) }
+                } else {
+                    print("outcome:", outcome, ms)
+                }
             } catch { print("error:", error.localizedDescription) }
             exit(0)
         }

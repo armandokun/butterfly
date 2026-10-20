@@ -36,7 +36,7 @@ struct NotchView: View {
 
     @ViewBuilder private var content: some View {
         HStack(spacing: 12) {
-            leading.frame(width: 28, height: 28)
+            leading.frame(minWidth: 28, maxHeight: 28).fixedSize(horizontal: true, vertical: false)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.system(size: 13, weight: .semibold))
@@ -61,8 +61,12 @@ struct NotchView: View {
             PulsingDot()
         case .thinking:
             ProgressView().controlSize(.small).tint(.white)
-        case .opened(let app):
-            Image(nsImage: app.icon).resizable().interpolation(.high)
+        case .opened(let apps, _):
+            HStack(spacing: -6) {
+                ForEach(apps, id: \.self) { app in
+                    Image(nsImage: app.icon).resizable().interpolation(.high).frame(width: 28, height: 28)
+                }
+            }
         case .openedSite(let url):
             Favicon(host: url.host() ?? "")
         case .unsure(let app?):
@@ -85,7 +89,7 @@ struct NotchView: View {
         switch model.phase {
         case .listening: model.transcript.isEmpty ? "Listening…" : model.transcript
         case .thinking: model.transcript
-        case .opened(let app): "Opening \(app.name)"
+        case .opened(let apps, _): "Opening " + Self.list(apps.map(\.name))
         case .openedSite(let url): "Opening \(url.host() ?? url.absoluteString)"
         case .unsure(let app?): "Did you mean \(app.name)?"
         case .unsure(nil): "Didn’t catch that"
@@ -99,8 +103,13 @@ struct NotchView: View {
         case .listening: "Release ⌥ to run"
         case .thinking: "Jev is deciding…"
         case .unsure: "Say it again a bit clearer"
+        case .opened(_, let detail): detail
         default: nil
         }
+    }
+
+    private static func list(_ names: [String]) -> String {
+        names.count <= 1 ? names.joined() : names.dropLast().joined(separator: ", ") + " & " + names.last!
     }
 }
 
