@@ -3,35 +3,86 @@ import SwiftUI
 struct NotchView: View {
     @ObservedObject var model: NotchModel
     private var closed: CGSize { _ = model.screenID; return NotchMetrics.closedSize }
+    private var island: Bool { _ = model.screenID; return !NotchMetrics.hasNotch }
 
-    private var isOpen: Bool { model.phase != .idle }
-    private var size: CGSize {
-        isOpen ? .init(width: max(closed.width + 220, 420), height: closed.height + 64) : closed
+    /// DynamicNotch-style presentations: closed notch → compact live activity → expanded.
+    private enum Presentation { case closed, compact, expanded }
+    private var presentation: Presentation {
+        switch model.phase {
+        case .idle: .closed
+        case .listening where model.transcript.isEmpty: .compact   // just widen beside the notch
+        default: .expanded
+        }
     }
+
+    private var size: CGSize {
+        switch (presentation, island) {
+        case (.closed, false): closed
+        case (.compact, false): .init(width: closed.width + 92, height: closed.height)
+        case (.expanded, false): .init(width: max(closed.width + 220, 420), height: closed.height + 64)
+        case (.closed, true): .init(width: 120, height: 32)
+        case (.compact, true): .init(width: 210, height: 34)
+        case (.expanded, true): .init(width: 400, height: 72)
+        }
+    }
+
+    /// (top flare, bottom corner); for the island, `bottom` is the pill radius.
+    private var radii: (top: CGFloat, bottom: CGFloat) {
+        switch (presentation, island) {
+        case (.expanded, false): (18, 28)
+        case (_, false): (max(4, closed.height / 3 - 4), closed.height / 3 + 2)
+        case (.expanded, true): (0, 26)
+        case (_, true): (0, size.height / 2)
+        }
+    }
+
+    private var shape: SurfaceShape { SurfaceShape(island: island, top: radii.top, bottom: radii.bottom) }
 
     var body: some View {
         VStack(spacing: 0) {
             ZStack(alignment: .top) {
-                NotchShape(top: isOpen ? 19 : 6, bottom: isOpen ? 24 : 14)
-                    .fill(.black)
-                    .shadow(color: .black.opacity(isOpen ? 0.55 : 0), radius: 10, y: 4)
+                shape.fill(.black)
+                    .overlay { if island { shape.stroke(.white.opacity(0.12), lineWidth: 1) } }
+                    .shadow(color: .black.opacity(presentation == .expanded ? 0.35 : 0), radius: 20, y: 6)
 
-                if isOpen {
-                    content
-                        .padding(.top, closed.height)
-                        .padding(.horizontal, 30)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .top)).combined(with: .offset(y: -8)))
+                Group {
+                    switch presentation {
+                    case .closed: EmptyView()
+                    case .compact:
+                        compact.transition(.notch(expanded: false, lift: 0))
+                    case .expanded:
+                        content
+                            .padding(.top, island ? 0 : closed.height)
+                            .padding(.horizontal, island ? 22 : 30)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .transition(.notch(expanded: true, lift: 48))
+                    }
                 }
+                .id(presentation)
+                .mask { shape.padding(.horizontal, island ? 0 : 4).padding(.bottom, 2) }
             }
             .frame(width: size.width, height: size.height)
-            .opacity(isOpen || NotchMetrics.hasNotch ? 1 : 0)
+            .opacity(presentation != .closed || !island ? 1 : 0)
+            .scaleEffect(presentation == .closed && island ? 0.6 : 1, anchor: .top)
+            .offset(y: island ? 4 : 0)
             Spacer(minLength: 0)
         }
         .frame(width: NotchPanel.size.width, height: NotchPanel.size.height)
-        .animation(.spring(response: 0.42, dampingFraction: 0.78), value: isOpen)
+        .animation(.spring(response: 0.47, dampingFraction: 0.7, blendDuration: 1), value: presentation)
+        .animation(.spring(response: 0.47, dampingFraction: 0.7, blendDuration: 1), value: island)
         .animation(.smooth(duration: 0.25), value: model.phase)
         .preferredColorScheme(.dark)
+    }
+
+    /// Live activity: indicator left of the notch, waveform right of it.
+    private var compact: some View {
+        HStack(spacing: 0) {
+            leading.frame(width: 20, height: 20)
+            Spacer(minLength: 0)
+            Waveform(levels: Array(model.levels.suffix(5)), maxHeight: 12)
+        }
+        .padding(.horizontal, island ? 16 : 14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     @ViewBuilder private var content: some View {
@@ -174,15 +225,16 @@ private struct PulsingDot: View {
 
 private struct Waveform: View {
     let levels: [CGFloat]
+    var maxHeight: CGFloat = 18
     var body: some View {
         HStack(spacing: 3) {
             ForEach(levels.indices, id: \.self) { i in
                 Capsule()
                     .fill(.white)
-                    .frame(width: 3, height: 4 + levels[i] * 18)
+                    .frame(width: 3, height: 4 + levels[i] * maxHeight)
             }
         }
-        .frame(height: 22)
+        .frame(height: maxHeight + 4)
         .animation(.easeOut(duration: 0.08), value: levels)
     }
 }
