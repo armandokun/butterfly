@@ -96,7 +96,8 @@ final class NotchModel: ObservableObject {
         guard let key = Keychain.apiKey else {
             // No key yet: simple fallbacks so the app still works.
             if let app = AppCatalog.shared.localMatch(text) { return launch(app) }
-            if let site = URLExtractor.candidates(in: text).first, let url = URLExtractor.url(for: site) { return openSite(url) }
+            let site = Vocabulary.matches(in: text).first { $0.contains(".") } ?? URLExtractor.candidates(in: text).first
+            if let site, let url = URLExtractor.url(for: site) { return openSite(url) }
             return show(.message("Add your TypeSafe key from the menu bar"))
         }
         do {

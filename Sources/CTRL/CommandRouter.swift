@@ -19,7 +19,13 @@ struct CommandRouter {
     func route(_ transcript: String) async throws -> Outcome {
         let catalog = AppCatalog.shared
         let apps = catalog.candidates(for: transcript, limit: 254)   // 255 minus "none"
-        let sites = URLExtractor.candidates(in: transcript)
+        // Your vocabulary wins over raw regex hits ("mail.sh" when you said "openmail.sh").
+        let known = Vocabulary.matches(in: transcript).filter { $0.contains(".") }
+        var sites = known
+        for s in URLExtractor.candidates(in: transcript) where !sites.contains(s) {
+            if known.contains(where: { $0.hasSuffix(s) }) { continue }   // drop fragments of a known address
+            sites.append(s)
+        }
 
         var questions: [String: TypeSafeClient.Question] = [
             "intent": .choice("What does the user want the computer to do?", options: [
@@ -57,6 +63,7 @@ struct CommandRouter {
 
         var state = ["spoken_command": transcript, "normalized": URLExtractor.normalize(transcript)]
         if !sites.isEmpty { state["web_addresses_detected"] = sites.joined(separator: ", ") }
+        if !known.isEmpty { state["users_known_sites"] = known.joined(separator: ", ") }
 
         let response = try await client.systemOne(state: state, questions: questions)
 

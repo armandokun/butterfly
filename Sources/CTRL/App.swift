@@ -96,6 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "Hold left ⌥ Option and speak", action: nil, keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Set TypeSafe API Key…", action: #selector(setKey), keyEquivalent: "")
+        menu.addItem(withTitle: "Edit Vocabulary…", action: #selector(editVocabulary), keyEquivalent: "")
         menu.addItem(withTitle: "Rescan Apps", action: #selector(rescan), keyEquivalent: "")
         menu.addItem(withTitle: "Accessibility Settings…", action: #selector(openAccessibility), keyEquivalent: "")
         menu.addItem(.separator())
@@ -128,6 +129,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func rescan() { AppCatalog.shared.reload() }
+
+    @objc private func editVocabulary() { Vocabulary.open() }
 
     @objc private func openAccessibility() {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)

@@ -48,6 +48,9 @@ final class SpeechRecorder {
         inputContinuation = continuation
 
         try await analyzer.prepareToAnalyze(in: format)
+        let context = AnalysisContext()
+        context.contextualStrings[.general] = Vocabulary.speechHints
+        try? await analyzer.setContext(context)
         try await analyzer.start(inputSequence: stream)
 
         resultsTask = Task { [weak self] in
