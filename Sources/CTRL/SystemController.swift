@@ -30,8 +30,8 @@ enum SystemController {
         "lock": "lock the screen / lock the Mac",
         "sleep": "put the Mac to sleep",
         "display_off": "turn the display/screen off (but don't sleep the Mac)",
-        "screenshot_full": "take a screenshot of the whole screen",
-        "screenshot_area": "take a screenshot of a selected area / part of the screen, or a screenshot with no detail given",
+        "screenshot_full": "take a screenshot of the whole screen, or just 'take a screenshot' with no area or window mentioned",
+        "screenshot_area": "take a screenshot of a selected area, region, or part of the screen (user wants to select/drag)",
         "screenshot_window": "take a screenshot of a window",
         "empty_trash": "empty the Trash / bin",
     ])
