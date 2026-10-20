@@ -149,6 +149,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setUpMenu()
         if CommandLine.arguments.contains("--routines") { editRoutines() }
 
+        if let s = ProcessInfo.processInfo.environment["CTRL_TIMER"].flatMap(Double.init) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { _ = Timers.shared.start(s) }
+        }
         if ProcessInfo.processInfo.environment["CTRL_DEMO"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.model.runDemo() }
             return

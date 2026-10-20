@@ -3,6 +3,7 @@ import SwiftUI
 struct NotchView: View {
     @ObservedObject var model: NotchModel
     @ObservedObject private var music = NowPlaying.shared
+    @ObservedObject private var timers = Timers.shared
     private var closed: CGSize { _ = model.screenID; return NotchMetrics.closedSize }
     private var island: Bool { _ = model.screenID; return !NotchMetrics.hasNotch }
 
@@ -10,7 +11,7 @@ struct NotchView: View {
     private enum Presentation: Hashable { case closed, compact, expanded }
     private var presentation: Presentation {
         switch model.phase {
-        case .idle: playingIdle ? .compact : .closed
+        case .idle: playingIdle || timerIdle ? .compact : .closed
         case .listening where model.transcript.isEmpty: .compact   // just widen beside the notch
         case .level: .compact
         default: .expanded
@@ -18,10 +19,12 @@ struct NotchView: View {
     }
     /// Idle + music playing: artwork left of the notch, equalizer right (DynamicNotch's "live activity").
     private var playingIdle: Bool { model.phase == .idle && music.track?.playing == true }
+    private var timerIdle: Bool { model.phase == .idle && timers.next != nil }
     private var isPlayer: Bool { model.phase == .nowPlaying && music.track != nil }
 
     private var compactExtra: CGFloat {
         if case .level = model.phase { return 150 }
+        if timerIdle { return 110 }
         return playingIdle ? 80 : 92
     }
 
@@ -90,6 +93,7 @@ struct NotchView: View {
 
     private var compactKind: String {
         if case .level = model.phase { return "level" }
+        if timerIdle { return "timer" }
         return playingIdle ? "music" : "listen"
     }
 
@@ -98,7 +102,19 @@ struct NotchView: View {
         HStack(spacing: 0) {
             switch model.phase {
             case .idle:
-                if let t = music.track {
+                if let t = timers.next {
+                    TimelineView(.periodic(from: .now, by: 1)) { _ in
+                        HStack(spacing: 0) {
+                            TimerRing(progress: t.progress).frame(width: 16, height: 16)
+                            Spacer(minLength: 0)
+                            Text(Timers.format(t.remaining))
+                                .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                                .foregroundStyle(.orange)
+                                .contentTransition(.numericText(countsDown: true))
+                                .animation(.default, value: Int(t.remaining))
+                        }
+                    }
+                } else if let t = music.track {
                     Artwork(image: t.artwork, size: island ? 22 : closed.height - 12)
                     Spacer(minLength: 0)
                     Equalizer(playing: t.playing)
@@ -182,6 +198,8 @@ struct NotchView: View {
             Image(systemName: k.symbol(for: v)).font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
         case .nowPlaying:
             EmptyView()
+        case .timerDone:
+            Image(systemName: "timer").font(.system(size: 20, weight: .semibold)).foregroundStyle(.orange)
         case .idle:
             EmptyView()
         }
@@ -205,6 +223,7 @@ struct NotchView: View {
         case .message(let text): text
         case .level(let k, let v): "\(k == .volume ? "Volume" : "Brightness") \(v)%"
         case .nowPlaying: music.track?.title ?? ""
+        case .timerDone: "Time’s up"
         case .idle: ""
         }
     }
@@ -217,6 +236,7 @@ struct NotchView: View {
         case .opened(_, let detail): detail
         case .media(_, _, let detail): detail
         case .system(_, _, let detail): detail
+        case .timerDone(let label): label
         default: nil
         }
     }

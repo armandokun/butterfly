@@ -16,6 +16,7 @@ final class NotchModel: ObservableObject {
         case message(String)
         case level(LevelKind, Int)   // compact HUD beside the notch
         case nowPlaying              // expanded player card (the compact one shows whenever music plays)
+        case timerDone(String)       // expanded "Timer done" alert
     }
 
     /// Background events (volume keys, battery, Wi-Fi…): only when the notch isn't busy with you.
@@ -39,6 +40,10 @@ final class NotchModel: ObservableObject {
             self?.ambient(.nowPlaying, for: 2.6)
         }
         NowPlaying.shared.start()
+        Timers.shared.onFinish = { [weak self] t in
+            // Always shown, even mid-command: it's what you asked for.
+            self?.show(.timerDone(t.label ?? Timers.spoken(t.total) + " timer"), for: 6)
+        }
     }
 
     @Published var phase: Phase = .idle
@@ -65,6 +70,7 @@ final class NotchModel: ObservableObject {
         case .message(let m): did = m
         case .level(let k, let v): did = "\(k == .volume ? "volume" : "brightness") set to \(v)%"
         case .nowPlaying: did = NowPlaying.shared.track.map { "now playing: \($0.title)" + ($0.artist.map { " by \($0)" } ?? "") + ($0.playing ? "" : " (paused)") } ?? "music"
+        case .timerDone(let l): did = "\(l) finished"
         default:
             switch outcome {
             case .type(let t, _), .continueTyping(let t): did = "typed “\(t.prefix(60))”"
@@ -407,6 +413,20 @@ final class NotchModel: ObservableObject {
                 let r = await WindowCommands.perform(action, app: app)
                 lastActionDisplay = WindowCommands.display(of: app)
                 show(.system(symbol: r.symbol, title: r.title, detail: r.detail), for: 1.4)
+            case .timer(let action, let seconds):
+                let timers = Timers.shared
+                switch action {
+                case .start:
+                    guard let seconds else { show(.system(symbol: "timer", title: "How long?", detail: "Say “set a timer for 5 minutes”"), for: 2); break }
+                    let t = timers.start(seconds)
+                    show(.system(symbol: "timer", title: "Timer · \(Timers.spoken(t.total))", detail: "Ends at \(t.ends.formatted(date: .omitted, time: .shortened))"), for: 1.6)
+                case .cancel:
+                    let n = timers.cancelAll()
+                    show(.system(symbol: "timer", title: n == 0 ? "No timer running" : "Timer cancelled", detail: nil), for: 1.4)
+                case .status:
+                    if let t = timers.next { show(.system(symbol: "timer", title: "\(Timers.spoken(t.remaining)) left", detail: "Ends at \(t.ends.formatted(date: .omitted, time: .shortened))"), for: 2) }
+                    else { show(.system(symbol: "timer", title: "No timer running", detail: nil), for: 1.4) }
+                }
             case .system(let action, let level):
                 let r = await SystemController.perform(action, level: level)
                 if let l = r.level { show(.level(l.kind, l.value), for: 1.6); break }

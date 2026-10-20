@@ -7,6 +7,7 @@ struct CommandRouter {
         case media(MediaController.Action, preferred: String?)
         case settings(SettingsController.Page, SettingsController.Action)
         case system(SystemController.Action, level: Int?)
+        case timer(Timers.Action, seconds: TimeInterval?)
         case window(WindowCommands.Action, NSRunningApplication)
         case click(Clicker.Element)
         case file(URL, reveal: Bool)
@@ -72,6 +73,7 @@ struct CommandRouter {
                 "next_track": "skip to the next song or track",
                 "previous_track": "go back to the previous song, or replay the last track",
                 "now_playing": "ask what song/track is playing, who sings this, or to show the music player / now playing",
+                "timer": "set, start, cancel, or check a timer / countdown (e.g. 'set a timer for 5 minutes', 'how long is left on my timer', 'remind me in 10 minutes')",
                 "settings": "open a specific System Settings page, check or change a Mac setting (Wi-Fi, Bluetooth, dark mode, battery, storage, display settings, notifications, privacy, keyboard, updates, etc.)",
                 "system": "change the volume (louder, quieter, mute, unmute) or screen brightness, lock the screen, put the Mac to sleep, turn the display off, take a screenshot, or empty the Trash",
                 "window": "move, snap, resize, center, maximize, minimize, close, or full-screen the current window (or a named app's window), send it to another screen, or hide or quit an app that's already open, or hide all other apps",
@@ -98,6 +100,8 @@ struct CommandRouter {
             "settings_action": SettingsController.actionQuestion,
             "settings_theme": SettingsController.themeQuestion,
             "system_action": SystemController.actionQuestion,
+            "timer_action": Timers.actionQuestion,
+            "timer_duration": Timers.durationQuestion,
             "window_action": WindowCommands.question,
             "files_action": Files.actionQuestion,
             "folder": Files.folderQuestion,
@@ -172,7 +176,7 @@ struct CommandRouter {
         let response = try await client.systemOne(state: state, questions: questions)
 
         if ProcessInfo.processInfo.environment["CTRL_DEBUG"] == "1" {
-            for k in ["intent", "routine", "target1", "windows", "layout", "settings_page", "settings_action", "menu_item", "system_action", "window_action", "click_target", "files_action", "folder", "level"] {
+            for k in ["intent", "routine", "target1", "windows", "layout", "settings_page", "settings_action", "menu_item", "system_action", "timer_action", "timer_duration", "window_action", "click_target", "files_action", "folder", "level"] {
                 if let a = response.choice(k) { print("  \(k): \(a.choice) (\(String(format: "%.2f", a.confidence)))") }
             }
             for (q, option) in checks.sorted(by: { $0.key < $1.key }) {
@@ -239,6 +243,11 @@ struct CommandRouter {
             } : nil
             guard let app = named ?? remembered ?? front ?? menu?.app else { return .notACommand }
             return .window(action, app)
+        }
+        if intent == "timer" {
+            let action = response.choice("timer_action").flatMap { Timers.Action(rawValue: $0.choice) } ?? .start
+            let jev = response.choice("timer_duration").flatMap { $0.choice == "none" ? nil : Double($0.choice) }
+            return .timer(action, seconds: Timers.seconds(in: normalized) ?? jev)
         }
         if intent == "system", let a = response.choice("system_action"), let action = SystemController.Action(rawValue: a.choice) {
             let jevLevel = response.choice("level").flatMap { $0.choice == "none" ? nil : $0.choice }

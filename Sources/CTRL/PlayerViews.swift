@@ -1,5 +1,18 @@
 import SwiftUI
 
+/// Countdown ring (fills as time passes).
+struct TimerRing: View {
+    let progress: Double
+    var body: some View {
+        ZStack {
+            Circle().stroke(.orange.opacity(0.25), lineWidth: 2.5)
+            Circle().trim(from: 0, to: progress).stroke(.orange, style: .init(lineWidth: 2.5, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+                .animation(.linear(duration: 1), value: progress)
+        }
+    }
+}
+
 /// Album art with a soft corner; music note when the app gives none.
 struct Artwork: View {
     let image: NSImage?
