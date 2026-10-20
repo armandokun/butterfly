@@ -1,4 +1,6 @@
 import AppKit
+import AVFoundation
+import Speech
 import SwiftUI
 
 @MainActor
@@ -27,7 +29,16 @@ final class NotchModel: ObservableObject {
     private var startTask: Task<Void, Never>?
 
     init() {
-        recorder.onPartial = { [weak self] in self?.transcript = $0 }
+        recorder.onPartial = { [weak self] text in
+            guard let self, !self.isLocked else { return }
+            self.transcript = text
+        }
+        // Locked mode: show only the sentence in progress; run each one as it finalizes.
+        recorder.onVolatile = { [weak self] text in
+            guard let self, self.isLocked, self.phase == .listening else { return }
+            self.transcript = text
+        }
+        recorder.onSegment = { [weak self] text in self?.enqueue(text) }
         recorder.onLevel = { [weak self] level in
             guard let self else { return }
             self.levels.removeFirst()
@@ -40,6 +51,20 @@ final class NotchModel: ObservableObject {
     }
 
     /// `CTRL_DEMO=1`: cycles through every state for visual checks.
+    /// `CTRL_LOCKTEST=file.aiff`: locked mode fed from an audio file instead of the mic.
+    func lockTest(_ path: String) {
+        isLocked = true
+        accepting = true
+        phase = .listening
+        Task {
+            let t = SpeechTranscriber(locale: Locale(identifier: "en-US"), preset: .progressiveTranscription)
+            let a = SpeechAnalyzer(modules: [t])
+            guard let f = try? AVAudioFile(forReading: URL(filePath: path)) else { return print("no file") }
+            let results = Task { for try await x in t.results where x.isFinal { print("segment:", String(x.text.characters)); self.enqueue(String(x.text.characters)) } }
+            try? await a.start(inputAudioFile: f, finishAfterFile: true)
+            _ = try? await results.value
+        }
+    }
     func runDemo() {
         Task {
             let safari = AppCatalog.shared.app(named: "Safari")
@@ -69,25 +94,80 @@ final class NotchModel: ObservableObject {
         levels = levels.map { _ in 0 }
         phase = .listening
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
-        // Read the front app's menus while you talk, so it costs no time later.
-        menuSnapshot = nil
-        frontApp = nil
-        clickables = []
-        if let front = NSWorkspace.shared.frontmostApplication, front.bundleIdentifier != Bundle.main.bundleIdentifier {
-            frontApp = front
-            Task {
-                self.menuSnapshot = MenuReader.snapshot(of: front)
-                self.clickables = Clicker.elements(of: front)
-            }
-        }
+        Task { self.readFrontApp() }   // after the notch appears
         startTask = Task {
             do { try await recorder.start() }
             catch { show(.message("Mic error: \(error.localizedDescription)")) }
         }
     }
 
+    /// Read the front app's menus and buttons while you talk, so it costs no time later.
+    private func readFrontApp() {
+        menuSnapshot = nil
+        frontApp = nil
+        clickables = []
+        if let front = NSWorkspace.shared.frontmostApplication, front.bundleIdentifier != Bundle.main.bundleIdentifier {
+            frontApp = front
+            menuSnapshot = MenuReader.snapshot(of: front)
+            clickables = Clicker.elements(of: front)
+        }
+    }
+
+    // MARK: Locked mode (⌥⇧): keep listening, run each sentence when you pause
+
+    @Published private(set) var isLocked = false
+    private var accepting = false          // still taking sentences (true until the mic fully stops)
+    private var queue: [String] = []
+    private var working = false
+
+    func lock() {
+        guard !isLocked else { return }
+        isLocked = true
+        accepting = true
+        if phase != .listening { begin() } else { dismissTask?.cancel() }
+        NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+    }
+
+    func unlock() {
+        guard isLocked else { return }
+        isLocked = false
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+        Task {
+            await startTask?.value
+            _ = await recorder.stop()   // flushes the last sentence through onSegment
+            accepting = false
+            if !working { close() }
+        }
+    }
+
+    private func enqueue(_ sentence: String) {
+        let s = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard accepting, s.count > 1 else { return }
+        // Saying "stop listening" ends locked mode too.
+        if s.lowercased().firstMatch(of: #/^(ok(ay)?,? )?(stop( listening)?|that's all|i'm done|done)[.!]?$/#) != nil {
+            return unlock()
+        }
+        queue.append(s)
+        guard !working else { return }
+        working = true
+        Task {
+            while !queue.isEmpty {
+                let next = queue.removeFirst()
+                dismissTask?.cancel()
+                transcript = next
+                phase = .thinking
+                readFrontApp()   // the last command may have changed what's in front
+                await handle(next)
+                // Let you see the result before the next one replaces it.
+                try? await Task.sleep(for: .milliseconds(queue.isEmpty ? 0 : 700))
+            }
+            working = false
+            if !accepting { close() }
+        }
+    }
+
     func end() {
-        guard phase == .listening else { return }
+        guard phase == .listening, !isLocked else { return }
         Task {
             await startTask?.value
             let text = await recorder.stop()
@@ -99,6 +179,7 @@ final class NotchModel: ObservableObject {
     }
 
     func cancel() {
+        guard !isLocked else { return }
         Task {
             await startTask?.value
             await recorder.cancel()
@@ -238,6 +319,12 @@ final class NotchModel: ObservableObject {
     }
 
     private func close() {
+        // Locked: results fade back to listening instead of closing.
+        if isLocked || (accepting && working) {
+            phase = .listening
+            transcript = ""
+            return
+        }
         phase = .idle
         transcript = ""
     }

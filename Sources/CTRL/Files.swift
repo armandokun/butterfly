@@ -79,12 +79,12 @@ enum Files {
 
     // MARK: Search (Spotlight, by file name)
 
-    private static let stop: Set<String> = [
+    nonisolated private static let stop: Set<String> = [
         "open", "find", "search", "show", "me", "my", "the", "a", "an", "file", "files", "document", "doc", "for", "called",
         "named", "please", "can", "you", "i", "want", "to", "in", "on", "of", "that", "this", "it", "up", "pull", "get", "where", "is",
         "folder", "finder", "reveal", "latest", "last", "recent", "with", "about", "and", "from", "dot",
     ]
-    private static let kinds: [String: Set<String>] = [
+    nonisolated private static let kinds: [String: Set<String>] = [
         "pdf": ["pdf"], "image": ["png", "jpg", "jpeg", "heic", "gif", "webp"], "photo": ["png", "jpg", "jpeg", "heic"],
         "picture": ["png", "jpg", "jpeg", "heic"], "video": ["mov", "mp4", "m4v"], "spreadsheet": ["xlsx", "csv", "numbers"],
         "presentation": ["key", "pptx", "pdf"], "deck": ["key", "pptx", "pdf"], "slides": ["key", "pptx", "pdf"],

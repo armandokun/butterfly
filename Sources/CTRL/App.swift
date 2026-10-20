@@ -131,6 +131,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkey.onBegin = { [weak self] in self?.model.begin() }
         hotkey.onEnd = { [weak self] in self?.model.end() }
         hotkey.onCancel = { [weak self] in self?.model.cancel() }
+        hotkey.onLock = { [weak self] in self?.model.lock() }
+        hotkey.onUnlock = { [weak self] in self?.model.unlock() }
         hotkey.start()
 
         setUpMenu()
@@ -138,6 +140,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if ProcessInfo.processInfo.environment["CTRL_DEMO"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.model.runDemo() }
+            return
+        }
+        if let path = ProcessInfo.processInfo.environment["CTRL_LOCKTEST"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.model.lockTest(path) }
             return
         }
         if !HotkeyMonitor.hasAccessibility { HotkeyMonitor.promptForAccessibility() }
@@ -168,6 +174,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.button?.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "CTRL")
         let menu = NSMenu()
         menu.addItem(withTitle: "Hold left ⌥ Option and speak", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "⌥⇧ to keep listening · tap ⌥ to stop", action: nil, keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Set TypeSafe API Key…", action: #selector(setKey), keyEquivalent: "")
         menu.addItem(withTitle: "Edit Vocabulary…", action: #selector(editVocabulary), keyEquivalent: "")

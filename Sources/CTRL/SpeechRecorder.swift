@@ -6,6 +6,9 @@ import Speech
 final class SpeechRecorder {
     var onPartial: ((String) -> Void)?
     var onLevel: ((Float) -> Void)?
+    /// Locked mode: each finalized phrase, and the in-progress (not yet final) text.
+    var onSegment: ((String) -> Void)?
+    var onVolatile: ((String) -> Void)?
 
     private let engine = AVAudioEngine()
     private var analyzer: SpeechAnalyzer?
@@ -61,11 +64,13 @@ final class SpeechRecorder {
                 if result.isFinal {
                     finalText += text
                     volatile = ""
+                    await MainActor.run { self?.onSegment?(text) }
                 } else {
                     volatile = text
                 }
                 let combined = finalText + volatile
-                await MainActor.run { self?.onPartial?(combined) }
+                let v = volatile
+                await MainActor.run { self?.onPartial?(combined); self?.onVolatile?(v) }
             }
             return finalText + volatile
         }

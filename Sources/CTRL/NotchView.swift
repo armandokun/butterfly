@@ -58,7 +58,11 @@ struct NotchView: View {
     @ViewBuilder private var leading: some View {
         switch model.phase {
         case .listening:
-            PulsingDot()
+            if model.isLocked {
+                Image(systemName: "lock.fill").font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
+            } else {
+                PulsingDot()
+            }
         case .thinking:
             ProgressView().controlSize(.small).tint(.white)
         case .opened(let targets, _):
@@ -97,7 +101,7 @@ struct NotchView: View {
 
     private var title: String {
         switch model.phase {
-        case .listening: model.transcript.isEmpty ? "Listening…" : model.transcript
+        case .listening: model.transcript.isEmpty ? (model.isLocked ? "Listening for commands…" : "Listening…") : model.transcript
         case .thinking: model.transcript
         case .opened(let targets, _): "Opening " + Self.list(targets.map(Self.name))
         case .media(_, let title, _): title
@@ -111,7 +115,7 @@ struct NotchView: View {
 
     private var subtitle: String? {
         switch model.phase {
-        case .listening: "Release ⌥ to run"
+        case .listening: model.isLocked ? "Locked · tap ⌥ to stop" : "Release ⌥ to run"
         case .thinking: "Jev is deciding…"
         case .unsure: "Say it again a bit clearer"
         case .opened(_, let detail): detail
