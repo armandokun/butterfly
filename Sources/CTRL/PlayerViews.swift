@@ -38,7 +38,7 @@ struct Equalizer: View {
     }
 }
 
-/// Expanded Now Playing: artwork, title, artist, progress, controls (they work by clicking too).
+/// Expanded Now Playing: artwork, title, artist, progress. Display only: you control it by voice.
 struct PlayerCard: View {
     let track: NowPlaying.Track
 
@@ -61,21 +61,7 @@ struct PlayerCard: View {
             TimelineView(.periodic(from: .now, by: 0.5)) { _ in
                 ProgressLine(track: track)
             }
-            HStack(spacing: 34) {
-                control("backward.fill", 5)
-                control(track.playing ? "pause.fill" : "play.fill", 2, size: 20)
-                control("forward.fill", 4)
-            }
         }
-    }
-
-    private func control(_ symbol: String, _ command: Int, size: CGFloat = 15) -> some View {
-        Button { NowPlaying.send(command) } label: {
-            Image(systemName: symbol).font(.system(size: size, weight: .semibold)).foregroundStyle(.white)
-                .contentTransition(.symbolEffect(.replace))
-                .frame(width: 28, height: 24)
-        }
-        .buttonStyle(.plain)
     }
 }
 

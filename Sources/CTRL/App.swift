@@ -137,7 +137,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.orderFrontRegardless()
         self.panel = panel
         model.onScreenChange = { [weak self] in self?.panel?.reposition() }
-        model.onInteractiveChange = { [weak self] on in self?.panel?.interactive = on }
 
         hotkey.onBegin = { [weak self] in self?.model.begin() }
         hotkey.onEnd = { [weak self] in self?.model.end() }

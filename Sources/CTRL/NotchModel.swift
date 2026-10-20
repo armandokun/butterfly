@@ -41,10 +41,7 @@ final class NotchModel: ObservableObject {
         NowPlaying.shared.start()
     }
 
-    @Published var phase: Phase = .idle {
-        didSet { if (phase == .nowPlaying) != (oldValue == .nowPlaying) { onInteractiveChange?(phase == .nowPlaying) } }
-    }
-    var onInteractiveChange: ((Bool) -> Void)?
+    @Published var phase: Phase = .idle
     @Published var transcript = ""
     @Published var levels: [CGFloat] = Array(repeating: 0, count: 5)
 

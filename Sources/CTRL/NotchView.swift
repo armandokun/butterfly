@@ -29,11 +29,11 @@ struct NotchView: View {
         switch (presentation, island) {
         case (.closed, false): closed
         case (.compact, false): .init(width: closed.width + compactExtra, height: closed.height)
-        case (.expanded, false): isPlayer ? .init(width: closed.width + 200, height: closed.height + 132)
+        case (.expanded, false): isPlayer ? .init(width: closed.width + 200, height: closed.height + 96)
                                           : .init(width: max(closed.width + 220, 420), height: closed.height + 64)
         case (.closed, true): .init(width: 120, height: 32)
         case (.compact, true): .init(width: 150 + compactExtra * 0.6, height: 34)
-        case (.expanded, true): isPlayer ? .init(width: 380, height: 150) : .init(width: 400, height: 72)
+        case (.expanded, true): isPlayer ? .init(width: 380, height: 112) : .init(width: 400, height: 72)
         }
     }
 
