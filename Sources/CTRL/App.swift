@@ -46,7 +46,10 @@ struct CTRLMain {
                 let router = CommandRouter(client: TypeSafeClient(apiKey: key))
                 let outcome = try await router.route(text, menu: menu, front: front, elements: elements)
                 let ms = String(format: "(%.0f ms)", Date().timeIntervalSince(start) * 1000)
-                if case .click(let el) = outcome {
+                if case .file(let url, let reveal) = outcome {
+                    print("outcome: file \(url.path) reveal=\(reveal) \(ms)")
+                    if exec { Files.open(url, reveal: reveal) }
+                } else if case .click(let el) = outcome {
                     print("outcome: click \(el.role) “\(el.label)” at \(el.frame) \(ms)")
                     if exec { front?.activate(); Clicker.press(el); try? await Task.sleep(for: .seconds(0.8)); print("executed") }
                 } else if case .clickVisual(let app, let what) = outcome {

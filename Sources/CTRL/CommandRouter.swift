@@ -9,6 +9,8 @@ struct CommandRouter {
         case system(SystemController.Action, level: Int?)
         case window(WindowCommands.Action, NSRunningApplication)
         case click(Clicker.Element)
+        case file(URL, reveal: Bool)
+        case fileNotFound(String)
         case clickVisual(NSRunningApplication, what: String)   // not in the accessibility tree: find it on a screenshot
         case menu(MenuReader.Item, NSRunningApplication)
         case routine(Routine)
@@ -29,6 +31,9 @@ struct CommandRouter {
     @MainActor
     func route(_ transcript: String, menu: MenuReader.Snapshot? = nil, front: NSRunningApplication? = nil, elements: [Clicker.Element] = []) async throws -> Outcome {
         let catalog = AppCatalog.shared
+        // Spotlight runs while Jev decides; only used if the answer is "find a file".
+        let fileSearch = Task.detached { await Files.search(transcript) }
+        defer { fileSearch.cancel() }
 
         let normalized = URLExtractor.normalize(transcript)
         let regexHits = URLExtractor.candidates(in: transcript)
@@ -64,6 +69,7 @@ struct CommandRouter {
                 "system": "change the volume (louder, quieter, mute, unmute) or screen brightness, lock the screen, put the Mac to sleep, turn the display off, take a screenshot, or empty the Trash",
                 "window": "move, snap, resize, center, maximize, minimize, close, or full-screen the current window (or a named app's window), send it to another screen, or hide or quit an app that's already open, or hide all other apps",
                 "click": "click, press, tap, or select something visible on screen: a button, link, tab, field, message, item, desktop widget, Dock icon, or menu bar icon (e.g. 'click send', 'press the blue button', 'click the first result', 'click the weather widget')",
+                "files": "open a folder (Downloads, Desktop, Documents, iCloud), open the latest download or screenshot, or find / open a specific file or document on the Mac. 'Show me the desktop' means the Desktop folder",
                 "none": "anything else, or nothing actionable",
             ]),
             "windows": .choice("How many windows of the same app does the user ask for? Speech-to-text often writes 'two' as 'to' or 'too'.", options: [
@@ -85,6 +91,9 @@ struct CommandRouter {
             "settings_theme": SettingsController.themeQuestion,
             "system_action": SystemController.actionQuestion,
             "window_action": WindowCommands.question,
+            "files_action": Files.actionQuestion,
+            "folder": Files.folderQuestion,
+            "reveal": Files.revealQuestion,
             "level": SystemController.levelQuestion,
         ]
         if let q = RoutineStore.shared.question { questions["routine"] = q }
@@ -138,7 +147,7 @@ struct CommandRouter {
         let response = try await client.systemOne(state: state, questions: questions)
 
         if ProcessInfo.processInfo.environment["CTRL_DEBUG"] == "1" {
-            for k in ["intent", "routine", "target1", "windows", "layout", "settings_page", "settings_action", "menu_item", "system_action", "window_action", "click_target", "level"] {
+            for k in ["intent", "routine", "target1", "windows", "layout", "settings_page", "settings_action", "menu_item", "system_action", "window_action", "click_target", "files_action", "folder", "level"] {
                 if let a = response.choice(k) { print("  \(k): \(a.choice) (\(String(format: "%.2f", a.confidence)))") }
             }
             for (q, option) in checks.sorted(by: { $0.key < $1.key }) {
@@ -153,6 +162,23 @@ struct CommandRouter {
         }
         if intent == "menu_command", let menu, let a = response.choice("menu_item"), let item = menuOptions[a.choice] {
             return a.confidence >= 0.4 ? .menu(item, menu.app) : .notACommand
+        }
+        if intent == "files", let a = response.choice("files_action"), let action = Files.Action(rawValue: a.choice) {
+            let reveal = (response.noul("reveal") ?? 0) >= 0.5
+            let folder = response.choice("folder").flatMap { Files.folder($0.choice) }
+            switch action {
+            case .openFolder:
+                guard let folder, let url = folder.url() else { return .notACommand }
+                return .file(url, reveal: false)
+            case .latest:
+                guard let folder else { return .notACommand }
+                guard let url = Files.latest(in: folder) else { return .fileNotFound("Nothing in \(folder.title)") }
+                return .file(url, reveal: reveal)
+            case .search:
+                let hits = await fileSearch.value
+                guard !hits.isEmpty else { return .fileNotFound("No file matches") }
+                return try await pickFile(transcript, from: hits, reveal: reveal)
+            }
         }
         if intent == "click" {
             if let a = response.choice("click_target"), a.choice != "none", a.confidence >= 0.5, let el = clickOptions[a.choice] { return .click(el) }
@@ -234,6 +260,28 @@ struct CommandRouter {
     }
 
     /// Is this app name (or one of its words, 3+ letters) in the spoken text?
+    /// Second quick request: which Spotlight hit is the file they meant?
+    @MainActor
+    private func pickFile(_ transcript: String, from hits: [Files.Hit], reveal: Bool) async throws -> Outcome {
+        var opts = ["none": "none of these files is what the user asked for"]
+        for (i, h) in hits.enumerated() { opts["f\(i)"] = Files.describe(h.url) }
+        let r = try await client.systemOne(
+            state: ["spoken_command": transcript],
+            questions: ["file": .choice("Which file does the user want? If several match equally (e.g. many invoices), pick the most recently modified one.", options: opts)])
+        if ProcessInfo.processInfo.environment["CTRL_DEBUG"] == "1", let a = r.choice("file") {
+            print("  file: \(a.choice) (\(String(format: "%.2f", a.confidence))) of \(hits.count) hits")
+        }
+        guard let a = r.choice("file"), a.choice != "none",
+              let i = Int(a.choice.dropFirst()), hits.indices.contains(i) else { return .fileNotFound("Couldn't find that file") }
+        // Low confidence usually means "several fit": take the newest of what Jev considered.
+        if a.confidence < 0.4 {
+            let likely = a.probabilities.filter { $0.key != "none" && $0.value >= 0.1 }.compactMap { Int($0.key.dropFirst()) }.filter(hits.indices.contains)
+            func modified(_ u: URL) -> Date { (try? u.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast }
+            if let best = likely.map({ hits[$0].url }).max(by: { modified($0) < modified($1) }) { return .file(best, reveal: reveal) }
+        }
+        return .file(hits[i].url, reveal: reveal)
+    }
+
     /// Second step for clicks not in the accessibility tree: screenshot + Jev Box.
     /// Returns a global (top-left origin) point, or nil when Jev says it isn't visible.
     @MainActor

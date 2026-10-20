@@ -147,6 +147,12 @@ final class NotchModel: ObservableObject {
     private func perform(_ outcome: CommandRouter.Outcome) async {
             switch outcome {
             case .routine: break   // handled by the caller; routines don't nest
+            case .file(let url, let reveal):
+                Files.open(url, reveal: reveal)
+                let name = url.lastPathComponent
+                show(.media(InstalledApp(name: name, url: url), title: name, detail: reveal ? "Shown in Finder" : nil), for: 1.8)
+            case .fileNotFound(let text):
+                show(.system(symbol: "doc.questionmark", title: text, detail: nil), for: 1.8)
             case .click(let el):
                 frontApp?.activate()
                 Clicker.press(el)
