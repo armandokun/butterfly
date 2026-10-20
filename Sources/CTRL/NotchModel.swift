@@ -24,6 +24,10 @@ final class NotchModel: ObservableObject {
     private var menuSnapshot: MenuReader.Snapshot?
     private var frontApp: NSRunningApplication?
     private var clickables: [Clicker.Element] = []
+    private var lastCommand: String?
+    private var lastCommandAt = Date.distantPast
+    private var dictating = false
+    private var typedInDictation = false   // first dictated sentence gets no leading space
     private var router: CommandRouter? { Keychain.apiKey.map { CommandRouter(client: TypeSafeClient(apiKey: $0)) } }
     private var dismissTask: Task<Void, Never>?
     private var startTask: Task<Void, Never>?
@@ -131,6 +135,7 @@ final class NotchModel: ObservableObject {
     func unlock() {
         guard isLocked else { return }
         isLocked = false
+        dictating = false
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
         Task {
             await startTask?.value
@@ -143,27 +148,55 @@ final class NotchModel: ObservableObject {
     private func enqueue(_ sentence: String) {
         let s = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
         guard accepting, s.count > 1 else { return }
-        // Saying "stop listening" ends locked mode too.
-        if s.lowercased().firstMatch(of: #/^(ok(ay)?,? )?(stop( listening)?|that's all|i'm done|done)[.!]?$/#) != nil {
-            return unlock()
-        }
         queue.append(s)
         guard !working else { return }
         working = true
         Task {
             while !queue.isEmpty {
-                let next = queue.removeFirst()
-                dismissTask?.cancel()
-                transcript = next
-                phase = .thinking
-                readFrontApp()   // the last command may have changed what's in front
-                await handle(next)
+                let chunk = queue.removeFirst()
+                // The recognizer can merge "Stop typing. Stop listening." into one result: handle control phrases per sentence.
+                for next in Self.controlSplit(chunk) {
+                    if !isLocked && !accepting { break }
+                    if next.lowercased().firstMatch(of: #/^(ok(ay)?,? )?(stop( listening)?|that's all|i'm done|done)[.!]?$/#) != nil {
+                        unlock()   // "stop listening" ends locked mode
+                        continue
+                    }
+                    if dictating, next.lowercased().firstMatch(of: #/^(ok(ay)?,? )?(stop|done|finish(ed)?|end) (typing|dictating|dictation)[.!]?$/#) != nil {
+                        dictating = false
+                        show(.system(symbol: "character.cursor.ibeam", title: "Stopped typing", detail: nil), for: 1.0)
+                        continue
+                    }
+                    dismissTask?.cancel()
+                    transcript = next
+                    phase = .thinking
+                    readFrontApp()   // the last command may have changed what's in front
+                    await handle(next)
+                }
                 // Let you see the result before the next one replaces it.
                 try? await Task.sleep(for: .milliseconds(queue.isEmpty ? 0 : 700))
             }
             working = false
             if !accepting { close() }
         }
+    }
+
+    /// Splits off control phrases ("stop typing", "stop listening") from a merged result; other text stays whole.
+    private static func controlSplit(_ text: String) -> [String] {
+        var parts: [String] = []
+        var current = ""
+        text.enumerateSubstrings(in: text.startIndex..., options: .bySentences) { s, _, _, _ in
+            guard let s else { return }
+            let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            let isControl = t.lowercased().firstMatch(of: #/^(ok(ay)?,? )?((stop|done|finish(ed)?|end) (typing|dictating|dictation|listening)|stop|that's all|i'm done|done)[.!]?$/#) != nil
+            if isControl {
+                if !current.isEmpty { parts.append(current.trimmingCharacters(in: .whitespaces)); current = "" }
+                parts.append(t)
+            } else {
+                current += s
+            }
+        }
+        if !current.trimmingCharacters(in: .whitespaces).isEmpty { parts.append(current.trimmingCharacters(in: .whitespaces)) }
+        return parts.isEmpty ? [text] : parts
     }
 
     func end() {
@@ -199,7 +232,28 @@ final class NotchModel: ObservableObject {
         }
         do {
             let router = CommandRouter(client: TypeSafeClient(apiKey: key))
-            let outcome = try await router.route(text, menu: menuSnapshot, front: frontApp, elements: clickables)
+            let previous = Date().timeIntervalSince(lastCommandAt) < 120 ? lastCommand : nil
+            var outcome = try await router.route(text, menu: menuSnapshot, front: frontApp, elements: clickables,
+                                                 previous: previous, dictating: dictating)
+            if case .repeatLast = outcome, let previous {
+                // Same words, fresh context: "close this tab" → "this one too" closes the new current tab.
+                outcome = try await router.route(previous, menu: menuSnapshot, front: frontApp, elements: clickables)
+            } else {
+                switch outcome {
+                case .notACommand, .unsure, .needAddress, .fileNotFound, .continueTyping, .startDictation, .repeatLast: break
+                default: lastCommand = text; lastCommandAt = Date()
+                }
+            }
+            // Mid-dictation, a "type" result is just more text: keep the space between sentences.
+            if dictating, case .type(let t, let ret) = outcome {
+                outcome = .continueTyping(ret ? t + " and press enter" : t)
+            }
+            // Dictation continues (locked mode) after "type …" until a real command.
+            switch outcome {
+            case .type, .startDictation, .continueTyping: dictating = isLocked
+            case .notACommand: break
+            default: dictating = false
+            }
             if case .routine(let r) = outcome { return await run(r, router: router) }
             await perform(outcome)
         } catch {
@@ -233,6 +287,20 @@ final class NotchModel: ObservableObject {
                 close()   // notch out of the way; typing goes to your cursor
                 try? await Task.sleep(for: .milliseconds(120))
                 await Typer.type(text, pressReturn: pressReturn)
+                typedInDictation = true
+            case .continueTyping(let text):
+                frontApp?.activate()
+                close()
+                // "…and press enter" / "send it" works mid-dictation too.
+                if let t = Typer.finishText(text) {
+                    let space = typedInDictation && !t.text.isEmpty ? " " : ""
+                    await Typer.type(space + t.text, pressReturn: t.pressReturn)
+                    if !t.text.isEmpty { typedInDictation = true }
+                }
+            case .startDictation:
+                typedInDictation = false
+                show(.system(symbol: "character.cursor.ibeam", title: "Dictating…", detail: "Say “stop typing” when done"), for: 1.6)
+            case .repeatLast: break   // resolved in handle()
             case .file(let url, let reveal):
                 Files.open(url, reveal: reveal)
                 let name = url.lastPathComponent

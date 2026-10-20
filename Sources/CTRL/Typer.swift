@@ -15,6 +15,11 @@ enum Typer {
         return triggers.contains { lower.range(of: "\\b\($0)\\b", options: .regularExpression) != nil }
     }
 
+    /// "Type …", "Please type …", "Dictate …" — unambiguous typing, whatever follows.
+    static func startsWithTrigger(_ transcript: String) -> Bool {
+        transcript.lowercased().firstMatch(of: #/^\W*((please|can you|could you|now|and|okay|ok)[ ,]+)*(type|dictate)\b/#) != nil
+    }
+
     /// Jev picks where the text to type starts: "enter my email armandas@…" → starts at "armandas@…".
     static func startQuestion(_ transcript: String) -> (TypeSafeClient.Question, [String: String.Index])? {
         var opts: [String: String] = [:]
@@ -51,7 +56,14 @@ enum Typer {
         return finish(String(transcript[start...]))
     }
 
-    private static func finish(_ raw: String) -> Text? {
+    private static func finish(_ raw: String) -> Text? { finishText(raw).flatMap { $0.text.isEmpty ? nil : $0 } }
+
+    /// Splits off "…and press enter" / "send it". Text may come back empty ("press enter" alone).
+    static func finishText(_ raw: String) -> Text? {
+        let bare = raw.lowercased().trimmingCharacters(in: CharacterSet.punctuationCharacters.union(.whitespaces))
+        if ["press enter", "hit enter", "press return", "hit return", "send it", "send", "and send it", "and press enter"].contains(bare) {
+            return Text(text: "", pressReturn: true)
+        }
         var text = raw.trimmingCharacters(in: .whitespaces)
         var pressReturn = false
         if let m = text.lowercased().firstMatch(of: sendSuffix) {
@@ -61,7 +73,9 @@ enum Typer {
         }
         // Strip quotes the transcriber sometimes adds.
         text = text.trimmingCharacters(in: CharacterSet(charactersIn: "\"“”' ").union(.whitespaces))
-        guard !text.isEmpty else { return nil }
+        // "Type." alone → nothing to type yet (punctuation the transcriber added).
+        if text.unicodeScalars.allSatisfy({ CharacterSet.punctuationCharacters.contains($0) }) { text = "" }
+        guard !text.isEmpty || pressReturn else { return nil }
         return Text(text: text, pressReturn: pressReturn)
     }
 

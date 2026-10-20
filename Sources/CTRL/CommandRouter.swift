@@ -11,6 +11,9 @@ struct CommandRouter {
         case click(Clicker.Element)
         case file(URL, reveal: Bool)
         case type(String, pressReturn: Bool)
+        case startDictation                      // just "type" — the words come next (locked mode)
+        case continueTyping(String)              // more dictation after a type command
+        case repeatLast                          // "this one too", "again"
         case fileNotFound(String)
         case clickVisual(NSRunningApplication, what: String)   // not in the accessibility tree: find it on a screenshot
         case menu(MenuReader.Item, NSRunningApplication)
@@ -29,8 +32,10 @@ struct CommandRouter {
     /// `menu`: the menu bar of the app that was in front when you pressed Option.
     /// `front`: that app (window commands act on it).
     /// `elements`: clickable things in its window, read while you spoke.
+    /// `previous`: the last command you gave (for "this one too"). `dictating`: a type command is in progress.
     @MainActor
-    func route(_ transcript: String, menu: MenuReader.Snapshot? = nil, front: NSRunningApplication? = nil, elements: [Clicker.Element] = []) async throws -> Outcome {
+    func route(_ transcript: String, menu: MenuReader.Snapshot? = nil, front: NSRunningApplication? = nil, elements: [Clicker.Element] = [],
+               previous: String? = nil, dictating: Bool = false) async throws -> Outcome {
         let catalog = AppCatalog.shared
         // Spotlight runs while Jev decides; only used if the answer is "find a file".
         let fileSearch = Task.detached { await Files.search(transcript) }
@@ -99,6 +104,15 @@ struct CommandRouter {
             "level": SystemController.levelQuestion,
         ]
         if let q = RoutineStore.shared.question { questions["routine"] = q }
+        if case .choice(let text, var intents) = questions["intent"]! {
+            if let previous {
+                intents["repeat"] = "do the previous command (“\(previous)”) again, e.g. 'this one too', 'this one as well', 'again', 'one more time', 'same here', 'do it again'"
+            }
+            if dictating {
+                intents["continue_typing"] = "more words to type: the user is still dictating text after a type command. Anything that isn't clearly a new command for the computer"
+            }
+            questions["intent"] = .choice(text, options: intents)
+        }
         let typeStart = Typer.hasTrigger(transcript) ? Typer.startQuestion(transcript) : nil
         if let typeStart { questions["type_start"] = typeStart.0 }
 
@@ -145,6 +159,8 @@ struct CommandRouter {
         }
 
         var state = ["spoken_command": transcript, "normalized": URLExtractor.normalize(transcript)]
+        if let previous { state["previous_command"] = previous }
+        if dictating { state["mode"] = "the user is dictating text; the last command was a type command" }
         if !sites.isEmpty { state["web_addresses_detected"] = sites.joined(separator: ", ") }
         if !known.isEmpty { state["users_known_sites"] = known.joined(separator: ", ") }
 
@@ -159,7 +175,14 @@ struct CommandRouter {
             }
         }
 
-        let intent = response.choice("intent")?.choice
+        var intent = response.choice("intent")?.choice
+        // "Type …" / "Dictate …" at the start is always typing, however long the text is.
+        if Typer.startsWithTrigger(transcript) { intent = "type" }
+        if intent == "repeat" { return previous == nil ? .notACommand : .repeatLast }
+        if intent == "continue_typing" {
+            let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? .notACommand : .continueTyping(text)
+        }
         // Routines first: your own phrases beat generic intents.
         if let r = response.choice("routine"), r.choice != "none", r.confidence >= 0.6, let routine = RoutineStore.shared.routine(named: r.choice) {
             return .routine(routine)
@@ -167,12 +190,15 @@ struct CommandRouter {
         if intent == "menu_command", let menu, let a = response.choice("menu_item"), let item = menuOptions[a.choice] {
             return a.confidence >= 0.4 ? .menu(item, menu.app) : .notACommand
         }
+        if intent == "type", dictating, !Typer.hasTrigger(transcript) {
+            return .continueTyping(transcript.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
         if intent == "type" {
             if let a = response.choice("type_start"), a.confidence >= 0.5, let i = typeStart?.1[a.choice],
                let t = Typer.extract(transcript, from: i) {
                 return .type(t.text, pressReturn: t.pressReturn)
             }
-            guard let t = Typer.extract(transcript) else { return .notACommand }
+            guard let t = Typer.extract(transcript) else { return Typer.hasTrigger(transcript) ? .startDictation : .notACommand }
             return .type(t.text, pressReturn: t.pressReturn)
         }
         if intent == "files", let a = response.choice("files_action"), let action = Files.Action(rawValue: a.choice) {

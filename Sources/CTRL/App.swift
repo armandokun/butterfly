@@ -44,7 +44,9 @@ struct CTRLMain {
             let start = Date()
             do {
                 let router = CommandRouter(client: TypeSafeClient(apiKey: key))
-                let outcome = try await router.route(text, menu: menu, front: front, elements: elements)
+                let env = ProcessInfo.processInfo.environment
+                let outcome = try await router.route(text, menu: menu, front: front, elements: elements,
+                                                     previous: env["CTRL_PREV"], dictating: env["CTRL_DICTATING"] == "1")
                 let ms = String(format: "(%.0f ms)", Date().timeIntervalSince(start) * 1000)
                 if case .type(let text, let ret) = outcome {
                     print("outcome: type “\(text)” return=\(ret) \(ms)")
