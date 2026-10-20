@@ -46,7 +46,10 @@ struct CTRLMain {
                 let router = CommandRouter(client: TypeSafeClient(apiKey: key))
                 let outcome = try await router.route(text, menu: menu, front: front, elements: elements)
                 let ms = String(format: "(%.0f ms)", Date().timeIntervalSince(start) * 1000)
-                if case .file(let url, let reveal) = outcome {
+                if case .type(let text, let ret) = outcome {
+                    print("outcome: type “\(text)” return=\(ret) \(ms)")
+                    if exec { front?.activate(); try? await Task.sleep(for: .milliseconds(300)); await Typer.type(text, pressReturn: ret); print("executed") }
+                } else if case .file(let url, let reveal) = outcome {
                     print("outcome: file \(url.path) reveal=\(reveal) \(ms)")
                     if exec { Files.open(url, reveal: reveal) }
                 } else if case .click(let el) = outcome {

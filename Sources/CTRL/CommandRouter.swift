@@ -10,6 +10,7 @@ struct CommandRouter {
         case window(WindowCommands.Action, NSRunningApplication)
         case click(Clicker.Element)
         case file(URL, reveal: Bool)
+        case type(String, pressReturn: Bool)
         case fileNotFound(String)
         case clickVisual(NSRunningApplication, what: String)   // not in the accessibility tree: find it on a screenshot
         case menu(MenuReader.Item, NSRunningApplication)
@@ -70,6 +71,7 @@ struct CommandRouter {
                 "window": "move, snap, resize, center, maximize, minimize, close, or full-screen the current window (or a named app's window), send it to another screen, or hide or quit an app that's already open, or hide all other apps",
                 "click": "click, press, tap, or select something visible on screen: a button, link, tab, field, message, item, desktop widget, Dock icon, or menu bar icon (e.g. 'click send', 'press the blue button', 'click the first result', 'click the weather widget')",
                 "files": "open a folder (Downloads, Desktop, Documents, iCloud), open the latest download or screenshot, or find / open a specific file or document on the Mac. 'Show me the desktop' means the Desktop folder",
+                "type": "type, write, or enter specific words/text into the current text field (e.g. 'type see you at 5', 'write hello world and press enter')",
                 "none": "anything else, or nothing actionable",
             ]),
             "windows": .choice("How many windows of the same app does the user ask for? Speech-to-text often writes 'two' as 'to' or 'too'.", options: [
@@ -97,6 +99,8 @@ struct CommandRouter {
             "level": SystemController.levelQuestion,
         ]
         if let q = RoutineStore.shared.question { questions["routine"] = q }
+        let typeStart = Typer.hasTrigger(transcript) ? Typer.startQuestion(transcript) : nil
+        if let typeStart { questions["type_start"] = typeStart.0 }
 
         // Click branch: the window's own buttons/links are the options.
         var clickOptions: [String: Clicker.Element] = [:]
@@ -162,6 +166,14 @@ struct CommandRouter {
         }
         if intent == "menu_command", let menu, let a = response.choice("menu_item"), let item = menuOptions[a.choice] {
             return a.confidence >= 0.4 ? .menu(item, menu.app) : .notACommand
+        }
+        if intent == "type" {
+            if let a = response.choice("type_start"), a.confidence >= 0.5, let i = typeStart?.1[a.choice],
+               let t = Typer.extract(transcript, from: i) {
+                return .type(t.text, pressReturn: t.pressReturn)
+            }
+            guard let t = Typer.extract(transcript) else { return .notACommand }
+            return .type(t.text, pressReturn: t.pressReturn)
         }
         if intent == "files", let a = response.choice("files_action"), let action = Files.Action(rawValue: a.choice) {
             let reveal = (response.noul("reveal") ?? 0) >= 0.5

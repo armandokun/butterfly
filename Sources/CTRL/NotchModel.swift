@@ -147,6 +147,11 @@ final class NotchModel: ObservableObject {
     private func perform(_ outcome: CommandRouter.Outcome) async {
             switch outcome {
             case .routine: break   // handled by the caller; routines don't nest
+            case .type(let text, let pressReturn):
+                frontApp?.activate()
+                close()   // notch out of the way; typing goes to your cursor
+                try? await Task.sleep(for: .milliseconds(120))
+                await Typer.type(text, pressReturn: pressReturn)
             case .file(let url, let reveal):
                 Files.open(url, reveal: reveal)
                 let name = url.lastPathComponent
