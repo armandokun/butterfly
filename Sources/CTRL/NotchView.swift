@@ -1,0 +1,155 @@
+import SwiftUI
+
+struct NotchView: View {
+    @ObservedObject var model: NotchModel
+    private let closed = NotchMetrics.closedSize
+
+    private var isOpen: Bool { model.phase != .idle }
+    private var size: CGSize {
+        isOpen ? .init(width: max(closed.width + 220, 420), height: closed.height + 64) : closed
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ZStack(alignment: .top) {
+                NotchShape(top: isOpen ? 19 : 6, bottom: isOpen ? 24 : 14)
+                    .fill(.black)
+                    .shadow(color: .black.opacity(isOpen ? 0.55 : 0), radius: 10, y: 4)
+
+                if isOpen {
+                    content
+                        .padding(.top, closed.height)
+                        .padding(.horizontal, 30)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .top)).combined(with: .offset(y: -8)))
+                }
+            }
+            .frame(width: size.width, height: size.height)
+            .opacity(isOpen || NotchMetrics.hasNotch ? 1 : 0)
+            Spacer(minLength: 0)
+        }
+        .frame(width: NotchPanel.size.width, height: NotchPanel.size.height)
+        .animation(.spring(response: 0.42, dampingFraction: 0.78), value: isOpen)
+        .animation(.smooth(duration: 0.25), value: model.phase)
+        .preferredColorScheme(.dark)
+    }
+
+    @ViewBuilder private var content: some View {
+        HStack(spacing: 12) {
+            leading.frame(width: 28, height: 28)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+            }
+            .lineLimit(1)
+            .truncationMode(.head)
+            .contentTransition(.opacity)
+            Spacer(minLength: 8)
+            trailing
+        }
+    }
+
+    @ViewBuilder private var leading: some View {
+        switch model.phase {
+        case .listening:
+            PulsingDot()
+        case .thinking:
+            ProgressView().controlSize(.small).tint(.white)
+        case .opened(let app):
+            Image(nsImage: app.icon).resizable().interpolation(.high)
+        case .openedSite(let url):
+            Favicon(host: url.host() ?? "")
+        case .unsure(let app?):
+            Image(nsImage: app.icon).resizable().opacity(0.5)
+        case .unsure(nil), .message:
+            Image(systemName: "questionmark.circle.fill")
+                .font(.system(size: 20)).foregroundStyle(.white.opacity(0.6))
+        case .idle:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder private var trailing: some View {
+        if model.phase == .listening {
+            Waveform(levels: model.levels)
+        }
+    }
+
+    private var title: String {
+        switch model.phase {
+        case .listening: model.transcript.isEmpty ? "Listening…" : model.transcript
+        case .thinking: model.transcript
+        case .opened(let app): "Opening \(app.name)"
+        case .openedSite(let url): "Opening \(url.host() ?? url.absoluteString)"
+        case .unsure(let app?): "Did you mean \(app.name)?"
+        case .unsure(nil): "Didn’t catch that"
+        case .message(let text): text
+        case .idle: ""
+        }
+    }
+
+    private var subtitle: String? {
+        switch model.phase {
+        case .listening: "Release ⌥ to run"
+        case .thinking: "Jev is deciding…"
+        case .unsure: "Say it again a bit clearer"
+        default: nil
+        }
+    }
+}
+
+/// Site's own favicon (we're opening the site anyway); globe until it loads.
+private struct Favicon: View {
+    let host: String
+    @State private var image: NSImage?
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image).resizable().interpolation(.high)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+            } else {
+                Image(systemName: "globe").font(.system(size: 20)).foregroundStyle(.white.opacity(0.7))
+            }
+        }
+        .task(id: host) {
+            guard let url = URL(string: "https://\(host)/favicon.ico"),
+                  let (data, _) = try? await URLSession.shared.data(from: url) else { return }
+            image = NSImage(data: data)
+        }
+    }
+}
+
+private struct PulsingDot: View {
+    @State private var on = false
+    var body: some View {
+        Circle()
+            .fill(Color.red)
+            .frame(width: 10, height: 10)
+            .shadow(color: .red.opacity(0.8), radius: on ? 6 : 2)
+            .scaleEffect(on ? 1.15 : 0.85)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) { on = true }
+            }
+    }
+}
+
+private struct Waveform: View {
+    let levels: [CGFloat]
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(levels.indices, id: \.self) { i in
+                Capsule()
+                    .fill(.white)
+                    .frame(width: 3, height: 4 + levels[i] * 18)
+            }
+        }
+        .frame(height: 22)
+        .animation(.easeOut(duration: 0.08), value: levels)
+    }
+}
