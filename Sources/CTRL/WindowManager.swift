@@ -6,25 +6,101 @@ import ApplicationServices
 enum WindowManager {
     enum Layout: String { case none, sideBySide = "side_by_side", stacked, maximize }
 
+    enum Target: Hashable {
+        case app(InstalledApp)
+        case site(URL)
+    }
+
     struct Plan {
-        var apps: [InstalledApp]
-        var windowsEach: Int     // only used when one app
+        var targets: [Target]
+        var windowsEach: Int     // only used for a single app
         var layout: Layout
+
+        var apps: [InstalledApp] { targets.compactMap { if case .app(let a) = $0 { a } else { nil } } }
     }
 
     static func run(_ plan: Plan) async {
-        var targets: [AXUIElement] = []
+        var windows: [AXUIElement] = []
+        let single = plan.targets.count == 1
+        // One site, no layout → normal behavior: a new tab in your browser.
+        let siteNeedsWindow = !single || plan.layout != .none
 
-        for app in plan.apps {
-            let count = plan.apps.count == 1 ? plan.windowsEach : 1
-            targets += await open(app, windows: count)
+        for target in plan.targets {
+            switch target {
+            case .app(let app):
+                windows += await open(app, windows: single ? plan.windowsEach : 1)
+            case .site(let url):
+                if siteNeedsWindow {
+                    if let w = await openInNewWindow(url) { windows.append(w) }
+                } else {
+                    NSWorkspace.shared.open(url)
+                }
+            }
         }
 
         // Several windows of one app, no layout mentioned → tile them instead of stacking on top of each other.
-        let layout = plan.layout == .none && plan.apps.count == 1 && targets.count > 1 ? .sideBySide : plan.layout
-        guard layout != .none, !targets.isEmpty, let screen = NotchMetrics.screen ?? NSScreen.main else { return }
-        tile(targets, layout: layout, in: screen.visibleFrame)
-        if let last = plan.apps.last { activate(last) }
+        let layout = plan.layout == .none && single && windows.count > 1 ? .sideBySide : plan.layout
+        guard layout != .none, !windows.isEmpty, let screen = NotchMetrics.screen ?? NSScreen.main else { return }
+        tile(windows, layout: layout, in: screen.visibleFrame)
+    }
+
+    // MARK: Websites
+
+    /// Opens `url` in a fresh window of the default browser and returns that window.
+    private static func openInNewWindow(_ url: URL) async -> AXUIElement? {
+        guard let browserURL = NSWorkspace.shared.urlForApplication(toOpen: URL(string: "https://example.com")!),
+              let bundle = Bundle(url: browserURL)?.bundleIdentifier else {
+            NSWorkspace.shared.open(url); return nil
+        }
+        let browser = InstalledApp(name: browserURL.deletingPathExtension().lastPathComponent, url: browserURL)
+
+        // Make sure it's running with its AX tree available, and remember the window count.
+        let wasRunning = running(browser) != nil
+        guard let app = try? await NSWorkspace.shared.openApplication(at: browserURL, configuration: activateConfig) else { return nil }
+        let ax = AXUIElementCreateApplication(app.processIdentifier)
+        _ = await waitFor(timeout: 6) { app.isFinishedLaunching }
+        if !wasRunning { _ = await waitFor(timeout: 3) { !windows(of: ax).isEmpty } }
+        let before = windows(of: ax).count
+
+        let link = url.absoluteString.replacingOccurrences(of: "\"", with: "%22")
+        switch bundle {
+        case "com.apple.Safari", "com.apple.SafariTechnologyPreview":
+            runScript("tell application id \"\(bundle)\" to make new document with properties {URL:\"\(link)\"}", fallback: url)
+        case _ where chromiumStyle.contains(bundle):
+            runScript("""
+            tell application id "\(bundle)"
+                set w to make new window
+                set URL of active tab of w to "\(link)"
+            end tell
+            """, fallback: url)
+        default:
+            // Firefox and others accept --new-window.
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+            p.arguments = ["-na", browserURL.path, "--args", "--new-window", url.absoluteString]
+            try? p.run()
+        }
+
+        // Only tile a window we actually created — never grab your existing one.
+        guard await waitFor(timeout: 4, { windows(of: ax).count > before }) else { return nil }
+        app.activate()
+        return windows(of: ax).first   // newest is frontmost
+    }
+
+    /// Browsers with Chrome-style AppleScript: `make new window` + `active tab`.
+    private static let chromiumStyle: Set<String> = [
+        "company.thebrowser.dia", "company.thebrowser.Browser",   // Dia, Arc
+        "com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.canary",
+        "com.brave.Browser", "com.microsoft.edgemac", "com.vivaldi.Vivaldi", "com.operasoftware.Opera",
+    ]
+
+    private static func runScript(_ source: String, fallback url: URL) {
+        var error: NSDictionary?
+        NSAppleScript(source: source)?.executeAndReturnError(&error)
+        if let error {
+            print("AppleScript error:", error)
+            NSWorkspace.shared.open(url)
+        }
     }
 
     // MARK: Launch + windows

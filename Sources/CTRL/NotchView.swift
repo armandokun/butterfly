@@ -61,14 +61,17 @@ struct NotchView: View {
             PulsingDot()
         case .thinking:
             ProgressView().controlSize(.small).tint(.white)
-        case .opened(let apps, _):
+        case .opened(let targets, _):
             HStack(spacing: -6) {
-                ForEach(apps, id: \.self) { app in
-                    Image(nsImage: app.icon).resizable().interpolation(.high).frame(width: 28, height: 28)
+                ForEach(targets, id: \.self) { target in
+                    switch target {
+                    case .app(let app):
+                        Image(nsImage: app.icon).resizable().interpolation(.high).frame(width: 28, height: 28)
+                    case .site(let url):
+                        Favicon(host: url.host() ?? "").frame(width: 24, height: 24).padding(2)
+                    }
                 }
             }
-        case .openedSite(let url):
-            Favicon(host: url.host() ?? "")
         case .unsure(let app?):
             Image(nsImage: app.icon).resizable().opacity(0.5)
         case .unsure(nil), .message:
@@ -89,8 +92,7 @@ struct NotchView: View {
         switch model.phase {
         case .listening: model.transcript.isEmpty ? "Listening…" : model.transcript
         case .thinking: model.transcript
-        case .opened(let apps, _): "Opening " + Self.list(apps.map(\.name))
-        case .openedSite(let url): "Opening \(url.host() ?? url.absoluteString)"
+        case .opened(let targets, _): "Opening " + Self.list(targets.map(Self.name))
         case .unsure(let app?): "Did you mean \(app.name)?"
         case .unsure(nil): "Didn’t catch that"
         case .message(let text): text
@@ -105,6 +107,13 @@ struct NotchView: View {
         case .unsure: "Say it again a bit clearer"
         case .opened(_, let detail): detail
         default: nil
+        }
+    }
+
+    private static func name(_ t: WindowManager.Target) -> String {
+        switch t {
+        case .app(let a): a.name
+        case .site(let u): u.host() ?? u.absoluteString
         }
     }
 

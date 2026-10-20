@@ -24,5 +24,7 @@
     <string>CTRL listens while you hold Option so it can understand your command.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
     <string>CTRL transcribes your voice on-device to understand your command.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>CTRL opens websites in new browser windows so it can place them side by side.</string>
 </dict>
 </plist>

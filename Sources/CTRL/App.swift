@@ -28,8 +28,11 @@ struct CTRLMain {
             do {
                 let outcome = try await CommandRouter(client: TypeSafeClient(apiKey: key)).route(text)
                 let ms = String(format: "(%.0f ms)", Date().timeIntervalSince(start) * 1000)
-                if case .openApps(let p) = outcome {
-                    print("outcome: open \(p.apps.map(\.name)) windows=\(p.windowsEach) layout=\(p.layout.rawValue) \(ms)")
+                if case .open(let p) = outcome {
+                    let names = p.targets.map { t -> String in
+                        switch t { case .app(let a): a.name; case .site(let u): u.absoluteString }
+                    }
+                    print("outcome: open \(names) windows=\(p.windowsEach) layout=\(p.layout.rawValue) \(ms)")
                     if exec { await WindowManager.run(p); print("executed, AX trusted:", HotkeyMonitor.hasAccessibility) }
                 } else {
                     print("outcome:", outcome, ms)

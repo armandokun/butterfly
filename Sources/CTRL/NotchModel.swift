@@ -7,8 +7,7 @@ final class NotchModel: ObservableObject {
         case idle
         case listening
         case thinking
-        case opened([InstalledApp], detail: String?)
-        case openedSite(URL)
+        case opened([WindowManager.Target], detail: String?)
         case unsure(InstalledApp?)
         case message(String)
     }
@@ -49,7 +48,7 @@ final class NotchModel: ObservableObject {
             phase = .thinking
             try? await Task.sleep(for: .seconds(1.2))
             if let safari, let slack = AppCatalog.shared.app(named: "Slack") {
-                phase = .opened([safari, slack], detail: "side by side")
+                phase = .opened([.app(safari), .app(slack)], detail: "side by side")
             }
             try? await Task.sleep(for: .seconds(1.5))
             close()
@@ -102,8 +101,7 @@ final class NotchModel: ObservableObject {
         }
         do {
             switch try await CommandRouter(client: TypeSafeClient(apiKey: key)).route(text) {
-            case .openApps(let plan): launch(plan)
-            case .openSite(let url): openSite(url)
+            case .open(let plan): launch(plan)
             case .unsure(let app): show(.unsure(app))
             case .needAddress: show(.message("Say the full address, like “facebook dot com”"))
             case .notACommand: show(.message("Try “open Safari” or “open facebook.com”"))
@@ -115,27 +113,27 @@ final class NotchModel: ObservableObject {
     }
 
     private func openSite(_ url: URL) {
-        NSWorkspace.shared.open(url)
-        show(.openedSite(url))
+        launch(.init(targets: [.site(url)], windowsEach: 1, layout: .none))
     }
 
     private func launch(_ app: InstalledApp) {
-        launch(.init(apps: [app], windowsEach: 1, layout: .none))
+        launch(.init(targets: [.app(app)], windowsEach: 1, layout: .none))
     }
 
     private func launch(_ plan: WindowManager.Plan) {
-        show(.opened(plan.apps, detail: Self.describe(plan)), for: 2.2)
+        show(.opened(plan.targets, detail: Self.describe(plan)), for: 2.2)
         Task { await WindowManager.run(plan) }
     }
 
     private static func describe(_ plan: WindowManager.Plan) -> String? {
+        let multiWindow = plan.targets.count == 1 && plan.apps.count == 1 && plan.windowsEach > 1
         var parts: [String] = []
-        if plan.apps.count == 1, plan.windowsEach > 1 { parts.append("\(plan.windowsEach) windows") }
+        if multiWindow { parts.append("\(plan.windowsEach) windows") }
         switch plan.layout {
         case .sideBySide: parts.append("side by side")
         case .stacked: parts.append("stacked")
         case .maximize: parts.append("maximized")
-        case .none: if plan.apps.count == 1, plan.windowsEach > 1 { parts.append("side by side") }
+        case .none: if multiWindow { parts.append("side by side") }
         }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }

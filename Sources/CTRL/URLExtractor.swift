@@ -32,9 +32,8 @@ enum URLExtractor {
             out.append(host + path)
 
             let before = ns.substring(to: m.range.location).split(separator: " ")
-            if let prev = before.last.map(String.init), !prev.isEmpty,
-               !fillers.contains(prev) || (prev == "open" && !host.hasPrefix("open")) {
-                out.append(prev + host + path)   // "open mail.sh" → "openmail.sh"
+            if let prev = before.last.map(String.init), !prev.isEmpty, !fillers.contains(prev) {
+                out.append(prev + host + path)   // "console openmail.sh" → also try "consoleopenmail.sh"
                 if before.count >= 2, !fillers.contains(String(before[before.count - 2])) {
                     out.append(String(before[before.count - 2]) + prev + host + path)
                 }
@@ -46,5 +45,11 @@ enum URLExtractor {
 
     static func url(for candidate: String) -> URL? {
         URL(string: candidate.hasPrefix("http") ? candidate : "https://" + candidate)
+    }
+
+    /// Normalized text with every web address cut out.
+    static func removingAddresses(from normalized: String) -> String {
+        let ns = normalized as NSString
+        return domain.stringByReplacingMatches(in: normalized, range: NSRange(location: 0, length: ns.length), withTemplate: " ")
     }
 }
