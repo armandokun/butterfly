@@ -142,6 +142,8 @@ final class NotchModel: ObservableObject {
     func lockTest(_ path: String) {
         isLocked = true
         accepting = true
+        dictationOnly = ProcessInfo.processInfo.environment["CTRL_LOCKDICT"] == "1"
+        frontApp = NSWorkspace.shared.frontmostApplication
         phase = .listening
         Task {
             let t = SpeechTranscriber(locale: Locale(identifier: "en-US"), preset: .progressiveTranscription)
@@ -236,11 +238,12 @@ final class NotchModel: ObservableObject {
     private var queue: [String] = []
     private var working = false
 
-    func lock() {
+    func lock(dictation: Bool = false) {
         guard !isLocked else { return }
         isLocked = true
         accepting = true
-        if phase != .listening { begin() } else { dismissTask?.cancel() }
+        typedInDictation = false
+        if phase != .listening { begin(dictation: dictation) } else { dismissTask?.cancel(); if dictation { dictationOnly = true } }
         NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
     }
 
@@ -248,6 +251,7 @@ final class NotchModel: ObservableObject {
         guard isLocked else { return }
         isLocked = false
         dictating = false
+        dictationOnly = false
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
         Task {
             await startTask?.value
@@ -266,6 +270,19 @@ final class NotchModel: ObservableObject {
         Task {
             while !queue.isEmpty {
                 let chunk = queue.removeFirst()
+                // Locked dictation: every sentence is just typed. Only "stop listening" / "stop dictating" end it.
+                if dictationOnly {
+                    for part in Self.controlSplit(chunk) {
+                        if part.lowercased().firstMatch(of: #/^(ok(ay)?,? )?(stop( (listening|dictating|dictation|typing))?|that's all|i'm done)[.!]?$/#) != nil {
+                            unlock(); break
+                        }
+                        frontApp?.activate()
+                        await Typer.type((typedInDictation ? " " : "") + part, pressReturn: false)
+                        typedInDictation = true
+                    }
+                    transcript = ""
+                    continue
+                }
                 // The recognizer can merge "Stop typing. Stop listening." into one result: handle control phrases per sentence.
                 for next in Self.controlSplit(chunk) {
                     if !isLocked && !accepting { break }

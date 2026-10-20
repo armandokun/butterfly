@@ -3,13 +3,13 @@ import ApplicationServices
 
 /// Hold LEFT Option (alone) = push-to-talk command. Hold RIGHT Option = dictation only (words typed, no commands).
 /// Option + any other key (e.g. ⌥← or typing "©") cancels, so normal shortcuts keep working.
-/// Left Option + Shift = lock: keeps listening until you tap Option again.
+/// Left Option + Shift = lock commands; Right Option + Shift = lock dictation. Tap Option to stop.
 @MainActor
 final class HotkeyMonitor {
     var onBegin: ((_ dictation: Bool) -> Void)?
     var onEnd: (() -> Void)?
     var onCancel: (() -> Void)?
-    var onLock: (() -> Void)?
+    var onLock: ((_ dictation: Bool) -> Void)?
     var onUnlock: (() -> Void)?
 
     /// Short delay so quick ⌥-shortcuts never flash the notch.
@@ -46,11 +46,11 @@ final class HotkeyMonitor {
         let rightOption = raw & 0x40 != 0 && raw & 0x20 == 0
         let optionOnly = mods == .option && leftOption
         let rightOnly = mods == .option && rightOption
-        let lockCombo = mods == [.option, .shift] && leftOption
+        let lockCombo = mods == [.option, .shift] && (leftOption || rightOption)
 
         if locked {
             if mods.isEmpty { lockArmed = true; return }   // keys from the ⌥⇧ combo let go
-            if lockArmed, optionOnly {                       // tap ⌥ → stop
+            if lockArmed, optionOnly || rightOnly {          // tap either ⌥ → stop
                 locked = false
                 lockArmed = false
                 onUnlock?()
@@ -63,7 +63,7 @@ final class HotkeyMonitor {
             locked = true
             lockArmed = false
             active = false
-            onLock?()   // also upgrades a push-to-talk that's already listening
+            onLock?(rightOption)   // right ⌥⇧ = locked dictation; also upgrades a push-to-talk already listening
             return
         }
 

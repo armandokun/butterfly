@@ -142,7 +142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkey.onBegin = { [weak self] dictation in self?.model.begin(dictation: dictation) }
         hotkey.onEnd = { [weak self] in self?.model.end() }
         hotkey.onCancel = { [weak self] in self?.model.cancel() }
-        hotkey.onLock = { [weak self] in self?.model.lock() }
+        hotkey.onLock = { [weak self] dictation in self?.model.lock(dictation: dictation) }
         hotkey.onUnlock = { [weak self] in self?.model.unlock() }
         hotkey.start()
         model.startObservers()
@@ -194,6 +194,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "Hold left ⌥ Option and speak", action: nil, keyEquivalent: "")
         menu.addItem(withTitle: "Hold right ⌥ to dictate (just types)", action: nil, keyEquivalent: "")
         menu.addItem(withTitle: "⌥⇧ to keep listening · tap ⌥ to stop", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "Right ⌥⇧ to keep dictating · tap ⌥ to stop", action: nil, keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Set TypeSafe API Key…", action: #selector(setKey), keyEquivalent: "")
         menu.addItem(withTitle: "Edit Vocabulary…", action: #selector(editVocabulary), keyEquivalent: "")

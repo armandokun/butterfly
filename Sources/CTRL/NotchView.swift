@@ -176,7 +176,8 @@ struct NotchView: View {
         switch model.phase {
         case .listening:
             if model.isLocked {
-                Image(systemName: "lock.fill").font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
+                Image(systemName: model.dictationOnly ? "character.cursor.ibeam" : "lock.fill")
+                    .font(.system(size: 14, weight: .semibold)).foregroundStyle(model.dictationOnly ? .blue : .white)
             } else if model.dictationOnly {
                 Image(systemName: "character.cursor.ibeam").font(.system(size: 15, weight: .semibold)).foregroundStyle(.blue)
             } else {
@@ -246,7 +247,7 @@ struct NotchView: View {
 
     private var subtitle: String? {
         switch model.phase {
-        case .listening: model.isLocked ? "Locked · tap ⌥ to stop" : model.dictationOnly ? "Dictating · release to type" : "Release ⌥ to run"
+        case .listening: model.isLocked ? (model.dictationOnly ? "Dictating · tap ⌥ to stop" : "Locked · tap ⌥ to stop") : model.dictationOnly ? "Dictating · release to type" : "Release ⌥ to run"
         case .thinking: "Jev is deciding…"
         case .unsure: "Say it again a bit clearer"
         case .opened(_, let detail): detail
