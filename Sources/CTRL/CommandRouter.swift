@@ -4,6 +4,7 @@ import Foundation
 struct CommandRouter {
     enum Outcome {
         case open(WindowManager.Plan)
+        case media(MediaController.Action, preferred: String?)
         case unsure(best: InstalledApp?)
         case needAddress
         case notACommand
@@ -45,6 +46,10 @@ struct CommandRouter {
         var questions: [String: TypeSafeClient.Question] = [
             "intent": .choice("What does the user want the computer to do?", options: [
                 "open": "open, launch, show, put, place, or arrange applications and/or websites on screen (domains with any ending such as .com, .sh, .ai, .io)",
+                "play_music": "play, start, resume, or put on music, a song, or a podcast",
+                "pause_music": "pause, stop, or silence the music or whatever is playing",
+                "next_track": "skip to the next song or track",
+                "previous_track": "go back to the previous song, or replay the last track",
                 "none": "anything else, or nothing actionable",
             ]),
             "windows": .choice("How many windows of the same app does the user ask for? Speech-to-text often writes 'two' as 'to' or 'too'.", options: [
@@ -91,7 +96,12 @@ struct CommandRouter {
             }
         }
 
-        guard response.choice("intent")?.choice == "open" else { return .notACommand }
+        let intent = response.choice("intent")?.choice
+        if let intent, let action = MediaController.Action(rawValue: intent) {
+            let preferred = spoken.contains("spotify") ? "Spotify" : (spoken.contains("apple music") || spoken.contains("music app")) ? "Music" : nil
+            return .media(action, preferred: preferred)
+        }
+        guard intent == "open" else { return .notACommand }
 
         // First item: the choice question (works even when speech misspells the name).
         var picked: [(option: String, position: Int)] = []

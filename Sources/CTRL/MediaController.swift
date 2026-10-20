@@ -1,0 +1,142 @@
+import AppKit
+
+/// Play / pause / next / previous for Apple Music and Spotify (AppleScript),
+/// with system media keys as a fallback for any other player (browser, etc.).
+@MainActor
+enum MediaController {
+    enum Action: String { case play = "play_music", pause = "pause_music", next = "next_track", previous = "previous_track" }
+
+    struct Result {
+        let player: InstalledApp?
+        let title: String
+        let detail: String?
+    }
+
+    private static let players: [(name: String, bundle: String)] = [
+        ("Spotify", "com.spotify.client"),
+        ("Music", "com.apple.Music"),
+    ]
+
+    /// `preferred`: the player named in the command, if any ("play music on Spotify").
+    static func perform(_ action: Action, preferred: String?) async -> Result {
+        let player = pickPlayer(for: action, preferred: preferred)
+
+        guard let player else {
+            // No scriptable player: use media keys (works for whatever is in Now Playing).
+            pressMediaKey(action)
+            return Result(player: nil, title: label(action), detail: nil)
+        }
+
+        let app = AppCatalog.shared.app(named: player.name)
+        if !isRunning(player.bundle), let app {
+            _ = try? await NSWorkspace.shared.openApplication(at: app.url, configuration: background)
+            _ = await waitUntil(timeout: 6) { isRunning(player.bundle) }
+            try? await Task.sleep(for: .milliseconds(600))   // let it finish loading before scripting it
+        }
+
+        let ok = run(script(action, player.name)) != nil
+        if !ok { pressMediaKey(action) }
+
+        try? await Task.sleep(for: .milliseconds(250))
+        let track = action == .pause ? nil : run("tell application \"\(player.name)\" to get (name of current track) & \" — \" & (artist of current track)")
+        return Result(player: app, title: track ?? label(action), detail: track == nil ? nil : label(action))
+    }
+
+    // MARK: Picking a player
+
+    private static func pickPlayer(for action: Action, preferred: String?) -> (name: String, bundle: String)? {
+        let installed = players.filter { AppCatalog.shared.app(named: $0.name) != nil }
+        if let preferred, let p = installed.first(where: { $0.name.caseInsensitiveCompare(preferred) == .orderedSame }) {
+            return p
+        }
+        let running = installed.filter { isRunning($0.bundle) }
+        // The one currently playing wins, then any running one.
+        if let playing = running.first(where: { state($0.name) == "playing" }) { return playing }
+        if let any = running.first { return any }
+        // Nothing running: only "play" should launch something.
+        return action == .play ? installed.last : nil   // Music is always installed; Spotify if you have it
+    }
+
+    private static func state(_ name: String) -> String? {
+        run("tell application \"\(name)\" to get player state as text")
+    }
+
+    private static func script(_ action: Action, _ name: String) -> String {
+        switch action {
+        case .play where name == "Music":
+            // Nothing queued → shuffle something from your library.
+            return """
+            tell application "Music"
+                if player state is stopped then
+                    set shuffle enabled to true
+                    play (some track of library playlist 1)
+                else
+                    play
+                end if
+            end tell
+            """
+        case .play: return "tell application \"\(name)\" to play"
+        case .pause: return "tell application \"\(name)\" to pause"
+        case .next: return "tell application \"\(name)\" to next track"
+        case .previous: return "tell application \"\(name)\" to previous track"
+        }
+    }
+
+    // MARK: Helpers
+
+    private static var background: NSWorkspace.OpenConfiguration {
+        let c = NSWorkspace.OpenConfiguration()
+        c.activates = false   // music starts without stealing focus
+        return c
+    }
+
+    private static func isRunning(_ bundle: String) -> Bool {
+        !NSRunningApplication.runningApplications(withBundleIdentifier: bundle).isEmpty
+    }
+
+    @discardableResult
+    private static func run(_ source: String) -> String? {
+        var error: NSDictionary?
+        let out = NSAppleScript(source: source)?.executeAndReturnError(&error)
+        if let error {
+            print("AppleScript error:", error[NSAppleScript.errorNumber] ?? "?", error[NSAppleScript.errorMessage] ?? "")
+            return nil
+        }
+        return out?.stringValue ?? ""
+    }
+
+    private static func waitUntil(timeout: Double, _ condition: () -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return true }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        return condition()
+    }
+
+    private static func label(_ action: Action) -> String {
+        switch action {
+        case .play: "Playing"
+        case .pause: "Paused"
+        case .next: "Next track"
+        case .previous: "Previous track"
+        }
+    }
+
+    /// System media keys (NX_KEYTYPE_PLAY = 16, NEXT = 17, PREVIOUS = 18).
+    /// Play and pause share one toggle key.
+    private static func pressMediaKey(_ action: Action) {
+        let key: Int32 = switch action {
+        case .play, .pause: 16
+        case .next: 17
+        case .previous: 18
+        }
+        for down in [true, false] {
+            let flags = NSEvent.ModifierFlags(rawValue: down ? 0xA00 : 0xB00)
+            let data1 = Int((key << 16) | (down ? 0xA00 : 0xB00))
+            NSEvent.otherEvent(with: .systemDefined, location: .zero, modifierFlags: flags, timestamp: 0,
+                               windowNumber: 0, context: nil, subtype: 8, data1: data1, data2: -1)?
+                .cgEvent?.post(tap: .cghidEventTap)
+        }
+    }
+}

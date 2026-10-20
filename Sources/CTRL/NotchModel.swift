@@ -8,6 +8,7 @@ final class NotchModel: ObservableObject {
         case listening
         case thinking
         case opened([WindowManager.Target], detail: String?)
+        case media(InstalledApp?, title: String, detail: String?)
         case unsure(InstalledApp?)
         case message(String)
     }
@@ -102,6 +103,9 @@ final class NotchModel: ObservableObject {
         do {
             switch try await CommandRouter(client: TypeSafeClient(apiKey: key)).route(text) {
             case .open(let plan): launch(plan)
+            case .media(let action, let preferred):
+                let result = await MediaController.perform(action, preferred: preferred)
+                show(.media(result.player, title: result.title, detail: result.detail), for: 2.2)
             case .unsure(let app): show(.unsure(app))
             case .needAddress: show(.message("Say the full address, like “facebook dot com”"))
             case .notACommand: show(.message("Try “open Safari” or “open facebook.com”"))

@@ -34,6 +34,12 @@ struct CTRLMain {
                     }
                     print("outcome: open \(names) windows=\(p.windowsEach) layout=\(p.layout.rawValue) \(ms)")
                     if exec { await WindowManager.run(p); print("executed, AX trusted:", HotkeyMonitor.hasAccessibility) }
+                } else if case .media(let action, let preferred) = outcome {
+                    print("outcome: media \(action.rawValue) preferred=\(preferred ?? "-") \(ms)")
+                    if exec {
+                        let r = await MediaController.perform(action, preferred: preferred)
+                        print("executed: \(r.player?.name ?? "media key") — \(r.title) \(r.detail ?? "")")
+                    }
                 } else {
                     print("outcome:", outcome, ms)
                 }
