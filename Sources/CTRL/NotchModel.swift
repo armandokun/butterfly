@@ -107,7 +107,28 @@ final class NotchModel: ObservableObject {
             return show(.message("Add your TypeSafe key from the menu bar"))
         }
         do {
-            switch try await CommandRouter(client: TypeSafeClient(apiKey: key)).route(text, menu: menuSnapshot) {
+            let router = CommandRouter(client: TypeSafeClient(apiKey: key))
+            let outcome = try await router.route(text, menu: menuSnapshot)
+            if case .routine(let r) = outcome {
+                // Each step is a normal command: route it, run it, give apps a moment to appear.
+                for (i, step) in r.steps.enumerated() {
+                    show(.media(nil, title: r.name, detail: "\(i + 1)/\(r.steps.count) · \(step)"), for: 30)
+                    if let o = try? await router.route(step) { await perform(o) }
+                    try? await Task.sleep(for: .seconds(1.2))
+                }
+                show(.media(nil, title: r.name, detail: "done"), for: 1.4)
+                return
+            }
+            await perform(outcome)
+        } catch {
+            if let app = AppCatalog.shared.localMatch(text) { return launch(app) }
+            show(.message(error.localizedDescription))
+        }
+    }
+
+    private func perform(_ outcome: CommandRouter.Outcome) async {
+            switch outcome {
+            case .routine: break   // handled by the caller; routines don't nest
             case .menu(let item, let app):
                 MenuReader.press(item, in: app)
                 let icon = app.bundleURL.map { InstalledApp(name: app.localizedName ?? "", url: $0) }
@@ -123,10 +144,6 @@ final class NotchModel: ObservableObject {
             case .needAddress: show(.message("Say the full address, like “facebook dot com”"))
             case .notACommand: show(.message("Try “open Safari” or “open facebook.com”"))
             }
-        } catch {
-            if let app = AppCatalog.shared.localMatch(text) { return launch(app) }
-            show(.message(error.localizedDescription))
-        }
     }
 
     private func openSite(_ url: URL) {

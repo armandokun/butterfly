@@ -38,7 +38,13 @@ struct CTRLMain {
             do {
                 let outcome = try await CommandRouter(client: TypeSafeClient(apiKey: key)).route(text, menu: menu)
                 let ms = String(format: "(%.0f ms)", Date().timeIntervalSince(start) * 1000)
-                if case .menu(let item, let app) = outcome {
+                if case .routine(let r) = outcome {
+                    print("outcome: routine \(r.name) \(ms)")
+                    for step in r.steps {
+                        let o = try await CommandRouter(client: TypeSafeClient(apiKey: key)).route(step)
+                        print("   step “\(step)” →", o)
+                    }
+                } else if case .menu(let item, let app) = outcome {
                     print("outcome: menu \(item.key) \(item.shortcut ?? "") \(ms)")
                     if exec { MenuReader.press(item, in: app); try? await Task.sleep(for: .seconds(1)); print("executed") }
                 } else if case .open(let p) = outcome {
@@ -126,6 +132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         menu.addItem(withTitle: "Set TypeSafe API Key…", action: #selector(setKey), keyEquivalent: "")
         menu.addItem(withTitle: "Edit Vocabulary…", action: #selector(editVocabulary), keyEquivalent: "")
+        menu.addItem(withTitle: "Edit Routines…", action: #selector(editRoutines), keyEquivalent: "")
         menu.addItem(withTitle: "Rescan Apps", action: #selector(rescan), keyEquivalent: "")
         menu.addItem(withTitle: "Accessibility Settings…", action: #selector(openAccessibility), keyEquivalent: "")
         menu.addItem(.separator())
@@ -160,6 +167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func rescan() { AppCatalog.shared.reload() }
 
     @objc private func editVocabulary() { Vocabulary.open() }
+    @objc private func editRoutines() { Routines.open() }
 
     @objc private func openAccessibility() {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
