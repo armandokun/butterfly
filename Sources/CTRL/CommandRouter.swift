@@ -6,6 +6,7 @@ struct CommandRouter {
         case open(WindowManager.Plan)
         case media(MediaController.Action, preferred: String?)
         case settings(SettingsController.Page, SettingsController.Action)
+        case system(SystemController.Action, level: Int?)
         case menu(MenuReader.Item, NSRunningApplication)
         case routine(Routine)
         case unsure(best: InstalledApp?)
@@ -54,7 +55,8 @@ struct CommandRouter {
                 "pause_music": "pause, stop, or silence the music or whatever is playing",
                 "next_track": "skip to the next song or track",
                 "previous_track": "go back to the previous song, or replay the last track",
-                "settings": "open a specific System Settings page, check or change a Mac setting (Wi-Fi, Bluetooth, dark mode, sound, battery, storage, display, notifications, privacy, keyboard, updates, etc.)",
+                "settings": "open a specific System Settings page, check or change a Mac setting (Wi-Fi, Bluetooth, dark mode, battery, storage, display settings, notifications, privacy, keyboard, updates, etc.)",
+                "system": "change the volume (louder, quieter, mute, unmute) or screen brightness, lock the screen, put the Mac to sleep, turn the display off, take a screenshot, or empty the Trash",
                 "none": "anything else, or nothing actionable",
             ]),
             "windows": .choice("How many windows of the same app does the user ask for? Speech-to-text often writes 'two' as 'to' or 'too'.", options: [
@@ -74,6 +76,8 @@ struct CommandRouter {
             "settings_page": SettingsController.pageQuestion,
             "settings_action": SettingsController.actionQuestion,
             "settings_theme": SettingsController.themeQuestion,
+            "system_action": SystemController.actionQuestion,
+            "level": SystemController.levelQuestion,
         ]
         if let q = RoutineStore.shared.question { questions["routine"] = q }
 
@@ -115,7 +119,7 @@ struct CommandRouter {
         let response = try await client.systemOne(state: state, questions: questions)
 
         if ProcessInfo.processInfo.environment["CTRL_DEBUG"] == "1" {
-            for k in ["intent", "routine", "target1", "windows", "layout", "settings_page", "settings_action", "menu_item"] {
+            for k in ["intent", "routine", "target1", "windows", "layout", "settings_page", "settings_action", "menu_item", "system_action", "level"] {
                 if let a = response.choice(k) { print("  \(k): \(a.choice) (\(String(format: "%.2f", a.confidence)))") }
             }
             for (q, option) in checks.sorted(by: { $0.key < $1.key }) {
@@ -130,6 +134,10 @@ struct CommandRouter {
         }
         if intent == "menu_command", let menu, let a = response.choice("menu_item"), let item = menuOptions[a.choice] {
             return a.confidence >= 0.4 ? .menu(item, menu.app) : .notACommand
+        }
+        if intent == "system", let a = response.choice("system_action"), let action = SystemController.Action(rawValue: a.choice) {
+            let jevLevel = response.choice("level").flatMap { $0.choice == "none" ? nil : $0.choice }
+            return .system(action, level: SystemController.level(in: normalized, jev: jevLevel))
         }
         if intent == "settings", let p = response.choice("settings_page"), let page = SettingsController.page(p.choice) {
             // "open system settings" / "open settings" with nothing else → just the app.

@@ -78,6 +78,9 @@ struct NotchView: View {
             Image(nsImage: app.icon).resizable().interpolation(.high).frame(width: 28, height: 28)
         case .media(nil, _, _):
             Image(systemName: "music.note").font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
+        case .system(let symbol, _, _):
+            Image(systemName: symbol).font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
+                .contentTransition(.symbolEffect(.replace))
         case .unsure(nil), .message:
             Image(systemName: "questionmark.circle.fill")
                 .font(.system(size: 20)).foregroundStyle(.white.opacity(0.6))
@@ -98,6 +101,7 @@ struct NotchView: View {
         case .thinking: model.transcript
         case .opened(let targets, _): "Opening " + Self.list(targets.map(Self.name))
         case .media(_, let title, _): title
+        case .system(_, let title, _): title
         case .unsure(let app?): "Did you mean \(app.name)?"
         case .unsure(nil): "Didn’t catch that"
         case .message(let text): text
@@ -112,6 +116,7 @@ struct NotchView: View {
         case .unsure: "Say it again a bit clearer"
         case .opened(_, let detail): detail
         case .media(_, _, let detail): detail
+        case .system(_, _, let detail): detail
         default: nil
         }
     }

@@ -44,6 +44,13 @@ struct CTRLMain {
                         let o = try await CommandRouter(client: TypeSafeClient(apiKey: key)).route(step)
                         print("   step “\(step)” →", o)
                     }
+                } else if case .system(let action, let level) = outcome {
+                    print("outcome: system \(action.rawValue) level=\(level.map(String.init) ?? "-") \(ms)")
+                    if exec, ![.lock, .sleep, .displayOff].contains(action) {
+                        let r = await SystemController.perform(action, level: level)
+                        print("executed: \(r.title) \(r.detail ?? "")")
+                        try? await Task.sleep(for: .seconds(1.2))
+                    }
                 } else if case .menu(let item, let app) = outcome {
                     print("outcome: menu \(item.key) \(item.shortcut ?? "") \(ms)")
                     if exec { MenuReader.press(item, in: app); try? await Task.sleep(for: .seconds(1)); print("executed") }

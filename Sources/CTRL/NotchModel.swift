@@ -9,6 +9,7 @@ final class NotchModel: ObservableObject {
         case thinking
         case opened([WindowManager.Target], detail: String?)
         case media(InstalledApp?, title: String, detail: String?)
+        case system(symbol: String, title: String, detail: String?)
         case unsure(InstalledApp?)
         case message(String)
     }
@@ -137,6 +138,9 @@ final class NotchModel: ObservableObject {
     private func perform(_ outcome: CommandRouter.Outcome) async {
             switch outcome {
             case .routine: break   // handled by the caller; routines don't nest
+            case .system(let action, let level):
+                let r = await SystemController.perform(action, level: level)
+                show(.system(symbol: r.symbol, title: r.title, detail: r.detail), for: action == .screenshotFull ? 0.6 : 1.4)
             case .menu(let item, let app):
                 MenuReader.press(item, in: app)
                 let icon = app.bundleURL.map { InstalledApp(name: app.localizedName ?? "", url: $0) }
