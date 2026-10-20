@@ -36,9 +36,19 @@ final class NotchPanel: NSPanel {
 }
 
 enum NotchMetrics {
-    /// Prefer the built-in display with a notch.
+    /// The screen you're working on (set when you press ⌥). Nil → the built-in notch display.
+    @MainActor static var active: NSScreen?
+
+    /// Screen under the mouse: where you're looking.
+    @MainActor static var screenUnderMouse: NSScreen? {
+        let p = NSEvent.mouseLocation
+        return NSScreen.screens.first { NSMouseInRect(p, $0.frame, false) }
+    }
+
+    /// Active screen, else the built-in display with a notch.
     @MainActor static var screen: NSScreen? {
-        NSScreen.screens.first { $0.safeAreaInsets.top > 0 } ?? NSScreen.main
+        if let active, NSScreen.screens.contains(active) { return active }
+        return NSScreen.screens.first { $0.safeAreaInsets.top > 0 } ?? NSScreen.main
     }
 
     @MainActor static var hasNotch: Bool { (screen?.safeAreaInsets.top ?? 0) > 0 }
@@ -49,7 +59,7 @@ enum NotchMetrics {
         if let l = s.auxiliaryTopLeftArea?.width, let r = s.auxiliaryTopRightArea?.width {
             width = s.frame.width - l - r + 4
         }
-        let height = s.safeAreaInsets.top > 0 ? s.safeAreaInsets.top : s.frame.maxY - s.visibleFrame.maxY
+        let height = s.safeAreaInsets.top > 0 ? s.safeAreaInsets.top : max(24, s.frame.maxY - s.visibleFrame.maxY)
         return .init(width: width, height: height)
     }
 }

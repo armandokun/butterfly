@@ -324,20 +324,28 @@ struct CommandRouter {
     /// Returns a global (top-left origin) point, or nil when Jev says it isn't visible.
     @MainActor
     func locate(_ what: String, in app: NSRunningApplication) async throws -> CGPoint? {
-        guard let shot = try await Clicker.screenshot(of: app) else { return nil }
-        let ref = "img-" + UUID().uuidString
-        let response = try await client.systemOne(
-            state: ["screen": ref, "spoken_command": what],
-            questions: [
-                "target": .box("the on-screen element in `screen` that the user wants to click, per `spoken_command`. `screen` is the whole display: windows, desktop widgets, Dock, and menu bar"),
-                "visible": .noul("Is the thing the user wants to click (per `spoken_command`) visible in `screen`?"),
-            ],
-            images: [.init(ref: ref, jpeg: shot.jpeg)])
-        if ProcessInfo.processInfo.environment["CTRL_DEBUG"] == "1", let b = response.box("target") {
-            print("  box: \(b.box) conf=\(String(format: "%.2f", b.confidence)) visible=\(response.noul("visible") ?? -1)")
+        let shots = try await Clicker.screenshots(of: app)
+        guard !shots.isEmpty else { return nil }
+        // Every display in one request: a Box + "is it here?" per screen, then click the most likely.
+        var state = ["spoken_command": what]
+        var questions: [String: TypeSafeClient.Question] = [:]
+        var images: [TypeSafeClient.Image] = []
+        for (i, shot) in shots.enumerated() {
+            let ref = "img-\(i)-" + UUID().uuidString
+            state["screen_\(i)"] = ref
+            images.append(.init(ref: ref, jpeg: shot.jpeg))
+            questions["target_\(i)"] = .box("the on-screen element in `screen_\(i)` that the user wants to click, per `spoken_command`. `screen_\(i)` is a whole display: windows, desktop widgets, Dock, and menu bar")
+            questions["visible_\(i)"] = .noul("Is the thing the user wants to click (per `spoken_command`) visible in `screen_\(i)`?")
         }
-        guard let b = response.box("target"), (response.noul("visible") ?? 0) >= 0.5 else { return nil }
-        return Clicker.point(in: shot, box: b.box)
+        let response = try await client.systemOne(state: state, questions: questions, images: images)
+        let best = shots.indices.max { (response.noul("visible_\($0)") ?? 0) < (response.noul("visible_\($1)") ?? 0) }!
+        if ProcessInfo.processInfo.environment["CTRL_DEBUG"] == "1" {
+            for i in shots.indices {
+                print("  screen \(i): visible=\(String(format: "%.2f", response.noul("visible_\(i)") ?? -1)) box=\(response.box("target_\(i)").map { "\($0.box)" } ?? "-")")
+            }
+        }
+        guard let b = response.box("target_\(best)"), (response.noul("visible_\(best)") ?? 0) >= 0.5 else { return nil }
+        return Clicker.point(in: shots[best], box: b.box)
     }
 
     private static func mentions(_ spoken: String, _ name: String) -> Bool {

@@ -92,23 +92,31 @@ enum Clicker {
     /// Screenshot of the whole display the app is on (needs Screen Recording permission).
     /// Whole screen, not just the window: widgets, the Dock, menu bar, and other windows count too.
     static func screenshot(of app: NSRunningApplication) async throws -> Shot? {
+        try await screenshots(of: app).first
+    }
+
+    /// Every display, the app's display first.
+    static func screenshots(of app: NSRunningApplication) async throws -> [Shot] {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         let appWindow = content.windows.first { $0.owningApplication?.processID == app.processIdentifier && $0.windowLayer == 0 && $0.frame.width > 100 }
         let center = appWindow.map { CGPoint(x: $0.frame.midX, y: $0.frame.midY) } ?? NSEvent.mouseLocationTopLeft
-        guard let display = content.displays.first(where: { CGDisplayBounds($0.displayID).contains(center) }) ?? content.displays.first else { return nil }
-        let bounds = CGDisplayBounds(display.displayID)   // global, top-left origin
+        let displays = content.displays.sorted { a, _ in CGDisplayBounds(a.displayID).contains(center) }
         let me = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
-        let config = SCStreamConfiguration()
-        let scale = min(1568 / max(bounds.width, bounds.height), 2)
-        config.width = max(280, Int(bounds.width * scale))
-        config.height = max(280, Int(bounds.height * scale))
-        config.showsCursor = false
-        let filter = SCContentFilter(display: display, excludingApplications: me, exceptingWindows: [])
-        let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-        let rep = NSBitmapImageRep(cgImage: image)
-        guard let jpeg = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.8]) else { return nil }
-        if ProcessInfo.processInfo.environment["CTRL_DEBUG"] == "1" { try? jpeg.write(to: URL(fileURLWithPath: "/tmp/ctrl-shot.jpg")) }
-        return Shot(jpeg: jpeg, frame: bounds)
+        var shots: [Shot] = []
+        for display in displays {
+            let bounds = CGDisplayBounds(display.displayID)   // global, top-left origin
+            let config = SCStreamConfiguration()
+            let scale = min(1568 / max(bounds.width, bounds.height), 2)
+            config.width = max(280, Int(bounds.width * scale))
+            config.height = max(280, Int(bounds.height * scale))
+            config.showsCursor = false
+            let filter = SCContentFilter(display: display, excludingApplications: me, exceptingWindows: [])
+            let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+            guard let jpeg = NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.8]) else { continue }
+            if ProcessInfo.processInfo.environment["CTRL_DEBUG"] == "1" { try? jpeg.write(to: URL(fileURLWithPath: "/tmp/ctrl-shot-\(shots.count).jpg")) }
+            shots.append(Shot(jpeg: jpeg, frame: bounds))
+        }
+        return shots
     }
 
     static func point(in shot: Shot, box b: TypeSafeClient.BoxAnswer.Edges) -> CGPoint {

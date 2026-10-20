@@ -70,6 +70,7 @@ final class NotchModel: ObservableObject {
         }
     }
     func runDemo() {
+        moveToActiveScreen()
         Task {
             let safari = AppCatalog.shared.app(named: "Safari")
             phase = .listening
@@ -94,6 +95,7 @@ final class NotchModel: ObservableObject {
 
     func begin() {
         dismissTask?.cancel()
+        moveToActiveScreen()
         transcript = ""
         levels = levels.map { _ in 0 }
         phase = .listening
@@ -103,6 +105,20 @@ final class NotchModel: ObservableObject {
             do { try await recorder.start() }
             catch { show(.message("Mic error: \(error.localizedDescription)")) }
         }
+    }
+
+    // MARK: Multiple displays
+
+    /// Bumps when the notch moves to another screen, so the view re-measures.
+    @Published private(set) var screenID = 0
+    var onScreenChange: (() -> Void)?
+
+    /// The notch opens on the screen your mouse is on.
+    private func moveToActiveScreen() {
+        guard phase == .idle, let s = NotchMetrics.screenUnderMouse, s != NotchMetrics.screen else { return }
+        NotchMetrics.active = s
+        screenID += 1
+        onScreenChange?()
     }
 
     /// Read the front app's menus and buttons while you talk, so it costs no time later.

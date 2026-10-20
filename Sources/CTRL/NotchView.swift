@@ -2,7 +2,7 @@ import SwiftUI
 
 struct NotchView: View {
     @ObservedObject var model: NotchModel
-    private let closed = NotchMetrics.closedSize
+    private var closed: CGSize { _ = model.screenID; return NotchMetrics.closedSize }
 
     private var isOpen: Bool { model.phase != .idle }
     private var size: CGSize {

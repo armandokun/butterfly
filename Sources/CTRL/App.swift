@@ -129,6 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let panel = NotchPanel(rootView: NotchView(model: model))
         panel.orderFrontRegardless()
         self.panel = panel
+        model.onScreenChange = { [weak self] in self?.panel?.reposition() }
 
         hotkey.onBegin = { [weak self] in self?.model.begin() }
         hotkey.onEnd = { [weak self] in self?.model.end() }
