@@ -87,7 +87,7 @@ enum Clicker {
 
     // MARK: Screenshot + Box fallback
 
-    struct Shot { let jpeg: Data; let frame: CGRect }   // frame: global, top-left origin
+    struct Shot { let jpeg: Data; let frame: CGRect; let display: CGDirectDisplayID }   // frame: global, top-left origin
 
     /// Screenshot of the whole display the app is on (needs Screen Recording permission).
     /// Whole screen, not just the window: widgets, the Dock, menu bar, and other windows count too.
@@ -95,12 +95,13 @@ enum Clicker {
         try await screenshots(of: app).first
     }
 
-    /// Every display, the app's display first.
+    /// Every display, most likely first: the screen of your last action (past 2 min), else under the mouse, else the app's.
     static func screenshots(of app: NSRunningApplication) async throws -> [Shot] {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         let appWindow = content.windows.first { $0.owningApplication?.processID == app.processIdentifier && $0.windowLayer == 0 && $0.frame.width > 100 }
-        let center = appWindow.map { CGPoint(x: $0.frame.midX, y: $0.frame.midY) } ?? NSEvent.mouseLocationTopLeft
-        let displays = content.displays.sorted { a, _ in CGDisplayBounds(a.displayID).contains(center) }
+        let appDisplay = appWindow.flatMap { Memory.display(at: CGPoint(x: $0.frame.midX, y: $0.frame.midY)) }
+        let preferred = Memory.lastDisplay ?? Memory.displayUnderMouse ?? appDisplay
+        let displays = content.displays.sorted { a, _ in a.displayID == preferred }
         let me = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
         var shots: [Shot] = []
         for display in displays {
@@ -114,7 +115,7 @@ enum Clicker {
             let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
             guard let jpeg = NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.8]) else { continue }
             if ProcessInfo.processInfo.environment["CTRL_DEBUG"] == "1" { try? jpeg.write(to: URL(fileURLWithPath: "/tmp/ctrl-shot-\(shots.count).jpg")) }
-            shots.append(Shot(jpeg: jpeg, frame: bounds))
+            shots.append(Shot(jpeg: jpeg, frame: bounds, display: display.displayID))
         }
         return shots
     }

@@ -91,7 +91,7 @@ struct CommandRouter {
                 "stacked": "stacked, one above the other, top and bottom",
                 "maximize": "full screen, maximized, as big as possible",
             ]),
-            "target1": .choice("Which application or website does the user mention first?", options: options),
+            "target1": .choice("Which application or website does the user mention first in `spoken_command`? Only names actually said now count, not ones from `recent_actions`.", options: options),
             // Settings branch, asked speculatively in the same request.
             "settings_page": SettingsController.pageQuestion,
             "settings_action": SettingsController.actionQuestion,
@@ -160,7 +160,11 @@ struct CommandRouter {
 
         var state = ["spoken_command": transcript, "normalized": URLExtractor.normalize(transcript)]
         if let previous { state["previous_command"] = previous }
+        if let recent = Memory.summary { state["recent_actions"] = recent }
         if dictating { state["mode"] = "the user is dictating text; the last command was a type command" }
+        if state["recent_actions"] != nil {
+            state["note"] = "`recent_actions` is what the user did in the last 2 minutes. Words like 'it', 'that', 'back', 'the other one' usually refer to it."
+        }
         if !sites.isEmpty { state["web_addresses_detected"] = sites.joined(separator: ", ") }
         if !known.isEmpty { state["users_known_sites"] = known.joined(separator: ", ") }
 
@@ -224,11 +228,15 @@ struct CommandRouter {
             return .clickVisual(app, what: transcript)
         }
         if intent == "window", let a = response.choice("window_action"), let action = WindowCommands.Action(rawValue: a.choice) {
-            // "quit slack" → Slack; "snap this left" → the app in front.
+            // "quit slack" → Slack; "quit it" right after "open slack" → Slack; "snap this left" → the app in front.
             let named = mentionedApps.compactMap { app in
                 NSWorkspace.shared.runningApplications.first { $0.bundleURL?.standardizedFileURL == app.url.standardizedFileURL }
             }.first
-            guard let app = named ?? front ?? menu?.app else { return .notACommand }
+            let refersBack = normalized.firstMatch(of: #/\b(it|that|them|back)\b/#) != nil
+            let remembered = refersBack ? Memory.recent.last?.app.flatMap { name in
+                NSWorkspace.shared.runningApplications.first { $0.localizedName == name }
+            } : nil
+            guard let app = named ?? remembered ?? front ?? menu?.app else { return .notACommand }
             return .window(action, app)
         }
         if intent == "system", let a = response.choice("system_action"), let action = SystemController.Action(rawValue: a.choice) {
@@ -263,7 +271,11 @@ struct CommandRouter {
         if let a = response.choice("target1") {
             let appName = a.choice.hasPrefix("app:") ? String(a.choice.dropFirst(4)) : nil
             let onlyInsideURL = appName.map { !sites.isEmpty && !Self.mentions(outsideURLs, $0) } ?? false
-            if onlyInsideURL {
+            // A name that's only in recent memory, not in what you just said ("open cursor" after "open slack").
+            let onlyFromMemory = appName.map { name in
+                !Self.mentions(spoken, name) && Memory.recent.contains { $0.said.lowercased().contains(name.lowercased()) || ($0.app == name) }
+            } ?? false
+            if onlyInsideURL || onlyFromMemory {
                 // e.g. "Console" picked from "console.openmail.sh": ignore, the sites below decide.
             } else if let appName, a.confidence < Self.appThreshold {
                 return .unsure(best: catalog.app(named: appName))
@@ -326,8 +338,17 @@ struct CommandRouter {
     func locate(_ what: String, in app: NSRunningApplication) async throws -> CGPoint? {
         let shots = try await Clicker.screenshots(of: app)
         guard !shots.isEmpty else { return nil }
-        // Every display in one request: a Box + "is it here?" per screen, then click the most likely.
+        // Most likely screen alone first (fast); the others only if it isn't there.
+        if let p = try await locate(what, on: Array(shots.prefix(1))) { return p }
+        guard shots.count > 1 else { return nil }
+        return try await locate(what, on: Array(shots.dropFirst()))
+    }
+
+    /// One request: a Box + "is it here?" per screen, then the most likely screen.
+    @MainActor
+    private func locate(_ what: String, on shots: [Clicker.Shot]) async throws -> CGPoint? {
         var state = ["spoken_command": what]
+        if let recent = Memory.summary { state["recent_actions"] = recent }
         var questions: [String: TypeSafeClient.Question] = [:]
         var images: [TypeSafeClient.Image] = []
         for (i, shot) in shots.enumerated() {
@@ -341,10 +362,11 @@ struct CommandRouter {
         let best = shots.indices.max { (response.noul("visible_\($0)") ?? 0) < (response.noul("visible_\($1)") ?? 0) }!
         if ProcessInfo.processInfo.environment["CTRL_DEBUG"] == "1" {
             for i in shots.indices {
-                print("  screen \(i): visible=\(String(format: "%.2f", response.noul("visible_\(i)") ?? -1)) box=\(response.box("target_\(i)").map { "\($0.box)" } ?? "-")")
+                print("  display \(shots[i].display): visible=\(String(format: "%.2f", response.noul("visible_\(i)") ?? -1)) box=\(response.box("target_\(i)").map { "\($0.box) conf=\(String(format: "%.2f", $0.confidence))" } ?? "-")")
             }
         }
-        guard let b = response.box("target_\(best)"), (response.noul("visible_\(best)") ?? 0) >= 0.5 else { return nil }
+        // Both must agree: "it's here" alone gives false positives (found a "purple elephant").
+        guard let b = response.box("target_\(best)"), (response.noul("visible_\(best)") ?? 0) >= 0.5, b.confidence >= 0.3 else { return nil }
         return Clicker.point(in: shots[best], box: b.box)
     }
 

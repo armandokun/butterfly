@@ -158,6 +158,17 @@ enum WindowCommands {
 
     // MARK: AX geometry (AX: top-left origin; Cocoa: bottom-left)
 
+    /// Display holding the app's focused window (top-left global coords).
+    static func display(of app: NSRunningApplication) -> CGDirectDisplayID? {
+        let ax = AXUIElementCreateApplication(app.processIdentifier)
+        guard let w: AXUIElement = attr(ax, kAXFocusedWindowAttribute) ?? attr(ax, kAXMainWindowAttribute),
+              let p: AXValue = attr(w, kAXPositionAttribute), let s: AXValue = attr(w, kAXSizeAttribute) else { return nil }
+        var pos = CGPoint.zero, size = CGSize.zero
+        AXValueGetValue(p, .cgPoint, &pos)
+        AXValueGetValue(s, .cgSize, &size)
+        return Memory.display(at: CGPoint(x: pos.x + size.width / 2, y: pos.y + size.height / 2))
+    }
+
     private static func frame(of window: AXUIElement) -> CGRect? {
         guard let p: AXValue = attr(window, kAXPositionAttribute), let s: AXValue = attr(window, kAXSizeAttribute) else { return nil }
         var pos = CGPoint.zero, size = CGSize.zero

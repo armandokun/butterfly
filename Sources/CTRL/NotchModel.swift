@@ -28,6 +28,30 @@ final class NotchModel: ObservableObject {
     private var lastCommandAt = Date.distantPast
     private var dictating = false
     private var typedInDictation = false   // first dictated sentence gets no leading space
+    private var lastActionDisplay: CGDirectDisplayID?
+
+    /// Short-term memory entry: what you said, what CTRL did, where.
+    private func remember(_ said: String, _ outcome: CommandRouter.Outcome) {
+        let did: String
+        switch phase {
+        case .opened(let targets, _): did = "opened " + targets.map { t in
+            switch t { case .app(let a): a.name; case .site(let u): u.host() ?? u.absoluteString } }.joined(separator: ", ")
+        case .media(_, let title, let detail), .system(_, let title, let detail): did = title + (detail.map { " · \($0)" } ?? "")
+        case .message(let m): did = m
+        default:
+            switch outcome {
+            case .type(let t, _), .continueTyping(let t): did = "typed “\(t.prefix(60))”"
+            case .notACommand, .unsure: return
+            default: did = "\(outcome)".prefix(80).description
+            }
+        }
+        let app: String? = {
+            if case .window(_, let a) = outcome { return a.localizedName }
+            if case .menu(_, let a) = outcome { return a.localizedName }
+            return frontApp?.localizedName
+        }()
+        Memory.record(said: said, did: did, app: app, display: lastActionDisplay)
+    }
     private var router: CommandRouter? { Keychain.apiKey.map { CommandRouter(client: TypeSafeClient(apiKey: $0)) } }
     private var dismissTask: Task<Void, Never>?
     private var startTask: Task<Void, Never>?
@@ -74,6 +98,11 @@ final class NotchModel: ObservableObject {
         Task {
             let safari = AppCatalog.shared.app(named: "Safari")
             phase = .listening
+            transcript = ""
+            for _ in 0..<14 {
+                levels.removeFirst(); levels.append(.random(in: 0.2...1))
+                try? await Task.sleep(for: .milliseconds(120))
+            }
             for t in ["open", "open sla", "open slack"] {
                 transcript = t
                 for _ in 0..<6 {
@@ -271,7 +300,9 @@ final class NotchModel: ObservableObject {
             default: dictating = false
             }
             if case .routine(let r) = outcome { return await run(r, router: router) }
+            lastActionDisplay = nil
             await perform(outcome)
+            remember(text, outcome)
         } catch {
             if let app = AppCatalog.shared.localMatch(text) { return launch(app) }
             show(.message(error.localizedDescription))
@@ -326,6 +357,7 @@ final class NotchModel: ObservableObject {
             case .click(let el):
                 frontApp?.activate()
                 Clicker.press(el)
+                lastActionDisplay = Memory.display(at: CGPoint(x: el.frame.midX, y: el.frame.midY))
                 show(.system(symbol: "cursorarrow.click", title: "Clicked", detail: el.label), for: 1.2)
             case .clickVisual(let app, let what):
                 show(.system(symbol: "eye", title: "Looking…", detail: what), for: 15)
@@ -334,6 +366,7 @@ final class NotchModel: ObservableObject {
                 do {
                     if let p = try await router.locate(what, in: app) {
                         Clicker.click(at: p)
+                        lastActionDisplay = Memory.display(at: p)
                         show(.system(symbol: "cursorarrow.click", title: "Clicked", detail: what), for: 1.2)
                     } else {
                         show(.system(symbol: "eye.slash", title: "Couldn't find it", detail: what), for: 1.8)
@@ -345,6 +378,7 @@ final class NotchModel: ObservableObject {
                 }
             case .window(let action, let app):
                 let r = await WindowCommands.perform(action, app: app)
+                lastActionDisplay = WindowCommands.display(of: app)
                 show(.system(symbol: r.symbol, title: r.title, detail: r.detail), for: 1.4)
             case .system(let action, let level):
                 let r = await SystemController.perform(action, level: level)

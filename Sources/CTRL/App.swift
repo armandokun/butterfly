@@ -23,6 +23,13 @@ struct CTRLMain {
         AppCatalog.shared.reload()
         print("sites:", URLExtractor.candidates(in: text))
         guard let key = Keychain.apiKey else { print("no API key"); exit(1) }
+        // CTRL_MEMORY="said|did|app;said|did|app" pretends these happened just now.
+        if let mem = ProcessInfo.processInfo.environment["CTRL_MEMORY"] {
+            for e in mem.split(separator: ";") {
+                let f = e.split(separator: "|").map(String.init)
+                if f.count >= 2 { Memory.record(said: f[0], did: f[1], app: f.count > 2 ? f[2] : nil) }
+            }
+        }
         // CTRL_APP=Dia pretends that app is in front (for menu commands).
         var menu: MenuReader.Snapshot?
         var front: NSRunningApplication?
