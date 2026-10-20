@@ -71,6 +71,7 @@ struct CommandRouter {
                 "pause_music": "pause, stop, or silence the music or whatever is playing",
                 "next_track": "skip to the next song or track",
                 "previous_track": "go back to the previous song, or replay the last track",
+                "now_playing": "ask what song/track is playing, who sings this, or to show the music player / now playing",
                 "settings": "open a specific System Settings page, check or change a Mac setting (Wi-Fi, Bluetooth, dark mode, battery, storage, display settings, notifications, privacy, keyboard, updates, etc.)",
                 "system": "change the volume (louder, quieter, mute, unmute) or screen brightness, lock the screen, put the Mac to sleep, turn the display off, take a screenshot, or empty the Trash",
                 "window": "move, snap, resize, center, maximize, minimize, close, or full-screen the current window (or a named app's window), send it to another screen, or hide or quit an app that's already open, or hide all other apps",

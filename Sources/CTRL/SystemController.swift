@@ -16,7 +16,10 @@ enum SystemController {
         var isLevel: Bool { self == .volumeSet || self == .brightnessSet }
     }
 
-    struct Result { let symbol: String; let title: String; let detail: String? }
+    struct Result {
+        let symbol: String; let title: String; let detail: String?
+        var level: (kind: LevelKind, value: Int)? = nil
+    }
 
     static let actionQuestion = TypeSafeClient.Question.choice("Which system control does the user want?", options: [
         "volume_up": "turn the sound/volume up, louder",
@@ -56,13 +59,13 @@ enum SystemController {
             let step = level ?? 12   // "turn it up by 20" → 20
             let target = action == .volumeSet ? (level ?? now) : now + (action == .volumeUp ? step : -step)
             let v = Audio.setVolume(target)
-            return Result(symbol: v == 0 ? "speaker.slash.fill" : "speaker.wave.\(v < 34 ? 1 : v < 67 ? 2 : 3).fill", title: "Volume \(v)%", detail: nil)
+            return Result(symbol: v == 0 ? "speaker.slash.fill" : "speaker.wave.\(v < 34 ? 1 : v < 67 ? 2 : 3).fill", title: "Volume \(v)%", detail: nil, level: (.volume, v))
         case .mute:
             Audio.setMuted(true)
-            return Result(symbol: "speaker.slash.fill", title: "Muted", detail: nil)
+            return Result(symbol: "speaker.slash.fill", title: "Muted", detail: nil, level: (.volume, 0))
         case .unmute:
             Audio.setMuted(false)
-            return Result(symbol: "speaker.wave.2.fill", title: "Volume \(Audio.volume)%", detail: "Unmuted")
+            return Result(symbol: "speaker.wave.2.fill", title: "Volume \(Audio.volume)%", detail: "Unmuted", level: (.volume, Audio.volume))
         case .brightnessUp, .brightnessDown, .brightnessSet:
             guard let now = Brightness.value else {
                 return Result(symbol: "sun.max.trianglebadge.exclamationmark", title: "Can't change brightness", detail: "No built-in display found")
@@ -70,7 +73,7 @@ enum SystemController {
             let step = level ?? 12
             let target = action == .brightnessSet ? (level ?? now) : now + (action == .brightnessUp ? step : -step)
             let v = Brightness.set(target)
-            return Result(symbol: v < 50 ? "sun.min.fill" : "sun.max.fill", title: "Brightness \(v)%", detail: nil)
+            return Result(symbol: v < 50 ? "sun.min.fill" : "sun.max.fill", title: "Brightness \(v)%", detail: nil, level: (.brightness, v))
         case .lock:
             // Let the notch show first; locking freezes the screen.
             Task { try? await Task.sleep(for: .milliseconds(500)); lockScreen() }

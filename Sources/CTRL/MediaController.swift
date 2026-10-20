@@ -4,7 +4,7 @@ import AppKit
 /// with system media keys as a fallback for any other player (browser, etc.).
 @MainActor
 enum MediaController {
-    enum Action: String { case play = "play_music", pause = "pause_music", next = "next_track", previous = "previous_track" }
+    enum Action: String { case play = "play_music", pause = "pause_music", next = "next_track", previous = "previous_track", show = "now_playing" }
 
     struct Result {
         let player: InstalledApp?
@@ -46,6 +46,9 @@ enum MediaController {
 
     private static func pickPlayer(for action: Action, preferred: String?) -> (name: String, bundle: String)? {
         let installed = players.filter { AppCatalog.shared.app(named: $0.name) != nil }
+        // Something else owns Now Playing (YouTube in a browser…): control that, not Music.
+        if preferred == nil, let t = NowPlaying.shared.track, t.playing || action != .play,
+           !players.contains(where: { $0.bundle == t.bundleID }) { return nil }
         if let preferred, let p = installed.first(where: { $0.name.caseInsensitiveCompare(preferred) == .orderedSame }) {
             return p
         }
@@ -79,6 +82,7 @@ enum MediaController {
         case .pause: return "tell application \"\(name)\" to pause"
         case .next: return "tell application \"\(name)\" to next track"
         case .previous: return "tell application \"\(name)\" to previous track"
+        case .show: return ""
         }
     }
 
@@ -120,14 +124,24 @@ enum MediaController {
         case .pause: "Paused"
         case .next: "Next track"
         case .previous: "Previous track"
+        case .show: "Now playing"
         }
     }
 
-    /// System media keys (NX_KEYTYPE_PLAY = 16, NEXT = 17, PREVIOUS = 18).
+    /// Whatever app owns Now Playing (browser, Podcasts…): exact MediaRemote commands, else media keys.
     /// Play and pause share one toggle key.
     private static func pressMediaKey(_ action: Action) {
+        if NowPlaying.shared.track != nil {
+            switch action {
+            case .play: return NowPlaying.send(0)
+            case .pause: return NowPlaying.send(1)
+            case .next: return NowPlaying.send(4)
+            case .previous: return NowPlaying.send(5)
+            case .show: return
+            }
+        }
         let key: Int32 = switch action {
-        case .play, .pause: 16
+        case .play, .pause, .show: 16
         case .next: 17
         case .previous: 18
         }

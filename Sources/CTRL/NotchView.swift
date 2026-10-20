@@ -2,36 +2,47 @@ import SwiftUI
 
 struct NotchView: View {
     @ObservedObject var model: NotchModel
+    @ObservedObject private var music = NowPlaying.shared
     private var closed: CGSize { _ = model.screenID; return NotchMetrics.closedSize }
     private var island: Bool { _ = model.screenID; return !NotchMetrics.hasNotch }
 
     /// DynamicNotch-style presentations: closed notch → compact live activity → expanded.
-    private enum Presentation { case closed, compact, expanded }
+    private enum Presentation: Hashable { case closed, compact, expanded }
     private var presentation: Presentation {
         switch model.phase {
-        case .idle: .closed
+        case .idle: playingIdle ? .compact : .closed
         case .listening where model.transcript.isEmpty: .compact   // just widen beside the notch
+        case .level: .compact
         default: .expanded
         }
+    }
+    /// Idle + music playing: artwork left of the notch, equalizer right (DynamicNotch's "live activity").
+    private var playingIdle: Bool { model.phase == .idle && music.track?.playing == true }
+    private var isPlayer: Bool { model.phase == .nowPlaying && music.track != nil }
+
+    private var compactExtra: CGFloat {
+        if case .level = model.phase { return 150 }
+        return playingIdle ? 80 : 92
     }
 
     private var size: CGSize {
         switch (presentation, island) {
         case (.closed, false): closed
-        case (.compact, false): .init(width: closed.width + 92, height: closed.height)
-        case (.expanded, false): .init(width: max(closed.width + 220, 420), height: closed.height + 64)
+        case (.compact, false): .init(width: closed.width + compactExtra, height: closed.height)
+        case (.expanded, false): isPlayer ? .init(width: closed.width + 200, height: closed.height + 132)
+                                          : .init(width: max(closed.width + 220, 420), height: closed.height + 64)
         case (.closed, true): .init(width: 120, height: 32)
-        case (.compact, true): .init(width: 210, height: 34)
-        case (.expanded, true): .init(width: 400, height: 72)
+        case (.compact, true): .init(width: 150 + compactExtra * 0.6, height: 34)
+        case (.expanded, true): isPlayer ? .init(width: 380, height: 150) : .init(width: 400, height: 72)
         }
     }
 
     /// (top flare, bottom corner); for the island, `bottom` is the pill radius.
     private var radii: (top: CGFloat, bottom: CGFloat) {
         switch (presentation, island) {
-        case (.expanded, false): (18, 28)
+        case (.expanded, false): isPlayer ? (24, 36) : (18, 28)
         case (_, false): (max(4, closed.height / 3 - 4), closed.height / 3 + 2)
-        case (.expanded, true): (0, 26)
+        case (.expanded, true): (0, isPlayer ? 34 : 26)
         case (_, true): (0, size.height / 2)
         }
     }
@@ -51,14 +62,17 @@ struct NotchView: View {
                     case .compact:
                         compact.transition(.notch(expanded: false, lift: 0))
                     case .expanded:
-                        content
-                            .padding(.top, island ? 0 : closed.height)
-                            .padding(.horizontal, island ? 22 : 30)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .transition(.notch(expanded: true, lift: 48))
+                        Group {
+                            if isPlayer, let t = music.track { PlayerCard(track: t) } else { content }
+                        }
+                        .padding(.top, island ? (isPlayer ? 16 : 0) : closed.height + (isPlayer ? 8 : 0))
+                        .padding(.horizontal, island ? 22 : 30)
+                        .padding(.bottom, isPlayer ? 16 : 0)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .transition(.notch(expanded: true, lift: 48))
                     }
                 }
-                .id(presentation)
+                .id(presentation == .compact ? "compact-\(compactKind)" : "\(presentation)")
                 .mask { shape.padding(.horizontal, island ? 0 : 4).padding(.bottom, 2) }
             }
             .frame(width: size.width, height: size.height)
@@ -74,12 +88,37 @@ struct NotchView: View {
         .preferredColorScheme(.dark)
     }
 
-    /// Live activity: indicator left of the notch, waveform right of it.
-    private var compact: some View {
+    private var compactKind: String {
+        if case .level = model.phase { return "level" }
+        return playingIdle ? "music" : "listen"
+    }
+
+    /// Live activity: something left of the notch, something right of it.
+    @ViewBuilder private var compact: some View {
         HStack(spacing: 0) {
-            leading.frame(width: 20, height: 20)
-            Spacer(minLength: 0)
-            Waveform(levels: Array(model.levels.suffix(5)), maxHeight: 12)
+            switch model.phase {
+            case .idle:
+                if let t = music.track {
+                    Artwork(image: t.artwork, size: island ? 22 : closed.height - 12)
+                    Spacer(minLength: 0)
+                    Equalizer(playing: t.playing)
+                }
+            case .level(let kind, let v):
+                Image(systemName: kind.symbol(for: v))
+                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
+                    .contentTransition(.symbolEffect(.replace))
+                    .frame(width: 22, alignment: .leading)
+                if island {
+                    Text("\(v)%").font(.system(size: 12, weight: .semibold).monospacedDigit()).foregroundStyle(.white.opacity(0.7))
+                        .padding(.leading, 6).contentTransition(.numericText())
+                }
+                Spacer(minLength: 0)
+                LevelBar(level: v, width: island ? 64 : 54)
+            default:
+                leading.frame(width: 20, height: 20)
+                Spacer(minLength: 0)
+                Waveform(levels: Array(model.levels.suffix(5)), maxHeight: 12)
+            }
         }
         .padding(.horizontal, island ? 16 : 14)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -139,6 +178,10 @@ struct NotchView: View {
         case .unsure(nil), .message:
             Image(systemName: "questionmark.circle.fill")
                 .font(.system(size: 20)).foregroundStyle(.white.opacity(0.6))
+        case .level(let k, let v):
+            Image(systemName: k.symbol(for: v)).font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
+        case .nowPlaying:
+            EmptyView()
         case .idle:
             EmptyView()
         }
@@ -160,6 +203,8 @@ struct NotchView: View {
         case .unsure(let app?): "Did you mean \(app.name)?"
         case .unsure(nil): "Didn’t catch that"
         case .message(let text): text
+        case .level(let k, let v): "\(k == .volume ? "Volume" : "Brightness") \(v)%"
+        case .nowPlaying: music.track?.title ?? ""
         case .idle: ""
         }
     }

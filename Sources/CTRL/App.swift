@@ -137,6 +137,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.orderFrontRegardless()
         self.panel = panel
         model.onScreenChange = { [weak self] in self?.panel?.reposition() }
+        model.onInteractiveChange = { [weak self] on in self?.panel?.interactive = on }
 
         hotkey.onBegin = { [weak self] in self?.model.begin() }
         hotkey.onEnd = { [weak self] in self?.model.end() }
@@ -144,6 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkey.onLock = { [weak self] in self?.model.lock() }
         hotkey.onUnlock = { [weak self] in self?.model.unlock() }
         hotkey.start()
+        model.startObservers()
 
         setUpMenu()
         if CommandLine.arguments.contains("--routines") { editRoutines() }

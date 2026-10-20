@@ -28,6 +28,11 @@ final class NotchPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
+    /// Clickable only while something interactive is shown (player controls); otherwise clicks pass through.
+    var interactive: Bool = false {
+        didSet { ignoresMouseEvents = !interactive }
+    }
+
     func reposition() {
         guard let screen = NotchMetrics.screen else { return }
         let f = screen.frame

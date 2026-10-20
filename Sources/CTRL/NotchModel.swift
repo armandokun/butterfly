@@ -14,9 +14,37 @@ final class NotchModel: ObservableObject {
         case system(symbol: String, title: String, detail: String?)
         case unsure(InstalledApp?)
         case message(String)
+        case level(LevelKind, Int)   // compact HUD beside the notch
+        case nowPlaying              // expanded player card (the compact one shows whenever music plays)
     }
 
-    @Published var phase: Phase = .idle
+    /// Background events (volume keys, battery, Wi-Fi…): only when the notch isn't busy with you.
+    func ambient(_ p: Phase, for seconds: Double = 1.6) {
+        switch phase {
+        case .idle, .level: show(p, for: seconds)
+        default:
+            if case .level = p { return }
+            guard !isLocked, phase != .listening, phase != .thinking else { return }
+            show(p, for: seconds)
+        }
+    }
+
+    private let volumeObserver = VolumeObserver()
+    func startObservers() {
+        volumeObserver.onChange = { [weak self] v in self?.ambient(.level(.volume, v), for: 1.4) }
+        volumeObserver.start()
+        // New song → show the card briefly; afterwards the compact player stays beside the notch.
+        NowPlaying.shared.onChange = { [weak self] old, new in
+            guard let new, new.playing, old?.id != new.id || old?.playing == false else { return }
+            self?.ambient(.nowPlaying, for: 2.6)
+        }
+        NowPlaying.shared.start()
+    }
+
+    @Published var phase: Phase = .idle {
+        didSet { if (phase == .nowPlaying) != (oldValue == .nowPlaying) { onInteractiveChange?(phase == .nowPlaying) } }
+    }
+    var onInteractiveChange: ((Bool) -> Void)?
     @Published var transcript = ""
     @Published var levels: [CGFloat] = Array(repeating: 0, count: 5)
 
@@ -38,6 +66,8 @@ final class NotchModel: ObservableObject {
             switch t { case .app(let a): a.name; case .site(let u): u.host() ?? u.absoluteString } }.joined(separator: ", ")
         case .media(_, let title, let detail), .system(_, let title, let detail): did = title + (detail.map { " · \($0)" } ?? "")
         case .message(let m): did = m
+        case .level(let k, let v): did = "\(k == .volume ? "volume" : "brightness") set to \(v)%"
+        case .nowPlaying: did = NowPlaying.shared.track.map { "now playing: \($0.title)" + ($0.artist.map { " by \($0)" } ?? "") + ($0.playing ? "" : " (paused)") } ?? "music"
         default:
             switch outcome {
             case .type(let t, _), .continueTyping(let t): did = "typed “\(t.prefix(60))”"
@@ -382,6 +412,7 @@ final class NotchModel: ObservableObject {
                 show(.system(symbol: r.symbol, title: r.title, detail: r.detail), for: 1.4)
             case .system(let action, let level):
                 let r = await SystemController.perform(action, level: level)
+                if let l = r.level { show(.level(l.kind, l.value), for: 1.6); break }
                 show(.system(symbol: r.symbol, title: r.title, detail: r.detail), for: action == .screenshotFull ? 0.6 : 1.4)
             case .menu(let item, let app):
                 MenuReader.press(item, in: app)
@@ -389,8 +420,15 @@ final class NotchModel: ObservableObject {
                 show(.media(icon, title: item.title, detail: item.path.dropLast().joined(separator: " → ")), for: 1.6)
             case .open(let plan): launch(plan)
             case .media(let action, let preferred):
+                if action == .show {
+                    if NowPlaying.shared.track != nil { show(.nowPlaying, for: 4) }
+                    else { show(.media(nil, title: "Nothing is playing", detail: nil), for: 1.6) }
+                    break
+                }
                 let result = await MediaController.perform(action, preferred: preferred)
-                show(.media(result.player, title: result.title, detail: result.detail), for: 2.2)
+                try? await Task.sleep(for: .milliseconds(250))   // let the now-playing stream catch up
+                if NowPlaying.shared.track != nil { show(.nowPlaying, for: 2.6) }
+                else { show(.media(result.player, title: result.title, detail: result.detail), for: 2.2) }
             case .settings(let page, let action):
                 let r = SettingsController.perform(page, action: action)
                 show(.media(SettingsController.settingsApp, title: r.title, detail: r.detail), for: 1.8)
