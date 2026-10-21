@@ -2,26 +2,66 @@ import AppKit
 import ServiceManagement
 import SwiftUI
 
-/// CTRL → Settings… (⌘,). Apple's standard Settings window: a fixed toolbar of panes
-/// (General · Vocabulary · Routines). The window title follows the pane, minimize/zoom are dimmed,
-/// and the last pane is restored, all done by the Settings scene itself.
+/// CTRL → Settings… (⌘,). One fixed-size window with a flat Pond tab strip (General · Vocabulary · Routines);
+/// the title follows the pane and the last pane is restored.
 struct SettingsView: View {
     var run: (Routine) -> Void
     @AppStorage("settingsPane") private var pane = "general"
 
+    private static let panes: [(id: String, title: String, icon: String, tint: Color)] = [
+        ("general", "General", "gearshape", Pond.lime),
+        ("vocabulary", "Vocabulary", "character.book.closed", Pond.lavender),
+        ("routines", "Routines", "bolt", Pond.peach),
+    ]
+
     var body: some View {
-        TabView(selection: $pane) {
-            Tab("General", systemImage: "gearshape", value: "general") { GeneralPane() }
-            Tab("Vocabulary", systemImage: "character.book.closed", value: "vocabulary") { VocabularyPane() }
-            Tab("Routines", systemImage: "bolt", value: "routines") { RoutinesPane(store: .shared, run: run) }
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                ForEach(Self.panes, id: \.id) { p in PondTab(title: p.title, icon: p.icon, tint: p.tint, selected: pane == p.id) { pane = p.id } }
+            }
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity)
+            Rectangle().fill(Pond.ink.opacity(0.12)).frame(height: 1)
+            Group {
+                switch pane {
+                case "vocabulary": VocabularyPane()
+                case "routines": RoutinesPane(store: .shared, run: run)
+                default: ScrollView { GeneralPane() }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .frame(width: 620)
+        .frame(width: 620, height: 600)
         .background(Pond.paper)
+        .navigationTitle(Self.panes.first { $0.id == pane }?.title ?? "Settings")
         .toolbarBackground(Pond.paper, for: .windowToolbar)
         .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
         .tint(Pond.ink)
         .accentColor(Pond.ink)
         .preferredColorScheme(.light)
+    }
+}
+
+/// Settings pane switcher: flat square block, ink glyph over a mono label; the selected pane is filled with its color.
+private struct PondTab: View {
+    let title: String, icon: String, tint: Color, selected: Bool
+    let action: () -> Void
+    @State private var hover = false
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: icon).font(.system(size: 17, weight: .regular)).symbolRenderingMode(.monochrome)
+                    .frame(height: 20)
+                Text(title.uppercased()).font(.system(size: 9.5, weight: .medium, design: .monospaced)).tracking(0.6)
+            }
+            .foregroundStyle(Pond.ink.opacity(selected ? 1 : 0.62))
+            .frame(width: 92, height: 50)
+            .background(selected ? tint : (hover ? Pond.ink.opacity(0.06) : .clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+        .animation(.easeOut(duration: 0.12), value: selected)
     }
 }
 
@@ -37,8 +77,8 @@ private struct GeneralPane: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(alignment: .center, spacing: 16) {
-                if let art = Bundle.main.image(forResource: "butterfly") {
-                    Image(nsImage: art).resizable().scaledToFit().frame(width: 84, height: 88)
+                if let art = Bundle.main.image(forResource: "mark") {
+                    Image(nsImage: art).resizable().scaledToFit().frame(width: 88, height: 88)
                 }
                 VStack(alignment: .leading, spacing: 6) {
                     Text("A faithful computer").font(Pond.display(26)).foregroundStyle(Pond.ink)
