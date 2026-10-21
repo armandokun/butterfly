@@ -1,10 +1,50 @@
 import AppKit
+import EventKit
 import SwiftUI
 
 @main
 struct CTRLMain {
     static func main() {
         let args = CommandLine.arguments
+        // `open CTRL.app --args --add-event "title" "yyyy-MM-dd HH:mm" minutes "location" "notes" ["calendar"]` (runs with CTRL's Calendar access)
+        if let i = args.firstIndex(of: "--add-event"), args.count >= i + 6 {
+            let a = Array(args[(i + 1)...])
+            Task {
+                _ = try? await Agent.store.requestFullAccessToEvents()
+                var out = "failed"
+                if let start = Agent.date(a[1]), let cal = Agent.calendar(named: a.count > 5 ? a[5] : "", request: "") {
+                    let e = EKEvent(eventStore: Agent.store)
+                    e.calendar = cal; e.title = a[0]; e.startDate = start
+                    e.endDate = start.addingTimeInterval((Double(a[2]) ?? 60) * 60)
+                    if !a[3].isEmpty { e.location = a[3] }
+                    if !a[4].isEmpty { e.notes = a[4] }
+                    do { try Agent.store.save(e, span: .thisEvent); out = "added \(a[0]) \(start) in \(cal.title)" } catch { out = "error \(error)" }
+                }
+                try? out.write(toFile: "/tmp/ctrl-add-event.txt", atomically: true, encoding: .utf8)
+                exit(0)
+            }
+            RunLoop.main.run()
+        }
+        if let i = args.firstIndex(of: "--date"), i + 1 < args.count {
+            for t in args[(i + 1)...] { print(t, "→", Agent.date(t).map { $0.formatted() } ?? "nil", "time:", Agent.hasTime(t)) }
+            return
+        }
+        // `CTRL --mictest`: records 3 s with the same recorder the notch uses, prints mic, level and transcript.
+        if args.contains("--mictest") {
+            Task { @MainActor in
+                let r = SpeechRecorder()
+                var peak: Float = 0
+                r.onLevel = { peak = max(peak, $0) }
+                try? await r.prepare()
+                do { try await r.start() } catch { print("start failed:", error); exit(1) }
+                print("listening with:", r.micName ?? "?")
+                try? await Task.sleep(for: .seconds(3))
+                let text = await r.stop()
+                print("peak level:", peak, "· heard:", text.isEmpty ? "(nothing)" : text)
+                exit(0)
+            }
+            RunLoop.main.run()
+        }
         if let i = args.firstIndex(of: "--route"), i + 1 < args.count {
             return routeFromCLI(args[(i + 1)...].joined(separator: " "))
         }
@@ -24,6 +64,8 @@ struct CTRLMain {
         print("sites:", URLExtractor.candidates(in: text))
         guard let key = Keychain.apiKey else { print("no API key"); exit(1) }
         Bluetooth.shared.refreshNow()
+        // CTRL_CLIPS="newest|older|oldest" pretends these were copied.
+        if let c = ProcessInfo.processInfo.environment["CTRL_CLIPS"] { Clipboard.shared.seed(c.components(separatedBy: "|")) }
         // CTRL_MEMORY="said|did|app;said|did|app" pretends these happened just now.
         if let mem = ProcessInfo.processInfo.environment["CTRL_MEMORY"] {
             for e in mem.split(separator: ";") {
@@ -93,7 +135,7 @@ struct CTRLMain {
                     }
                 } else if case .menu(let item, let app) = outcome {
                     print("outcome: menu \(item.key) \(item.shortcut ?? "") \(ms)")
-                    if exec { MenuReader.press(item, in: app); try? await Task.sleep(for: .seconds(1)); print("executed") }
+                    if exec { let ok = await MenuReader.press(item, in: app); try? await Task.sleep(for: .seconds(1)); print("executed", ok) }
                 } else if case .open(let p) = outcome {
                     let names = p.targets.map { t -> String in
                         switch t { case .app(let a): a.name; case .site(let u): u.absoluteString }
@@ -113,6 +155,29 @@ struct CTRLMain {
                         let r = await MediaController.perform(action, preferred: preferred)
                         print("executed: \(r.player?.name ?? "media key") — \(r.title) \(r.detail ?? "")")
                     }
+                } else if case .agent(let request) = outcome {
+                    print("outcome: agent \(ms)")
+                    if exec {
+                        Agent.dryRun = true
+                        Agent.runCommand = { c in print("   run_command:", c); return "Done" }
+                        Agent.typeText = { t in print("   type_text:", t) }
+                        let t = Date()
+                        for d in try await Agent.run(request, app: front, client: TypeSafeClient(apiKey: key)) { print("   done: \(d.text)") }
+                        print("   (\(Int(Date().timeIntervalSince(t) * 1000)) ms)")
+                    }
+                } else if case .navigate(let a) = outcome {
+                    print("outcome: navigate \(a.rawValue) \(ms)")
+                    if exec { let r = await KeyCommands.perform(a, in: front); print("executed: \(r.title)"); try? await Task.sleep(for: .seconds(0.5)) }
+                } else if case .screen(let a, let request) = outcome {
+                    print("outcome: screen \(a.rawValue) \(ms)")
+                    if exec {
+                        let t = Date()
+                        guard let (text, selected) = await ScreenReader.text(of: front) else { print("no text (screen recording?)"); exit(0) }
+                        print("   read \(text.count) chars, selected=\(selected) (\(Int(Date().timeIntervalSince(t) * 1000)) ms)")
+                        let t2 = Date()
+                        let answer = try await ScreenReader.answer(a, request: request, text: text, app: front?.localizedName)
+                        print("   answer (\(Int(Date().timeIntervalSince(t2) * 1000)) ms): \(answer)")
+                    }
                 } else {
                     print("outcome:", outcome, ms)
                 }
@@ -129,7 +194,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let hotkey = HotkeyMonitor()
     private var panel: NotchPanel?
     private var statusItem: NSStatusItem?
-    private let routinesWindow = RoutinesWindow()
+    private var openSettings: (() -> Void)?
+    private var scenes: AnyObject?   // keep the Settings scene alive
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // Apple's Settings scene (WWDC26 "Use SwiftUI with AppKit"): standard pane toolbar, title, dimmed buttons.
+        let model = self.model
+        let scenes = NSHostingSceneRepresentation {
+            Settings { SettingsView(run: { model.run($0) }) }
+        }
+        NSApplication.shared.addSceneRepresentation(scenes)
+        self.scenes = scenes
+        // While Settings is open CTRL is a normal app (Dock icon), so macOS brings you to it,
+        // even from a full-screen app. Closing it goes back to menu-bar-only.
+        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { note in
+            guard (note.object as? NSWindow)?.identifier?.rawValue.contains("Settings") == true else { return }
+            Task { @MainActor in NSApp.setActivationPolicy(.accessory) }
+        }
+        openSettings = { scenes.environment.openSettings() }
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppCatalog.shared.reload()
@@ -148,10 +231,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.startObservers()
 
         setUpMenu()
-        if CommandLine.arguments.contains("--routines") { editRoutines() }
+        LoginItem.applyDefault()
+        if CommandLine.arguments.contains("--routines") { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.editRoutines() } }
 
         if let b = ProcessInfo.processInfo.environment["CTRL_BADGE"]?.split(separator: "|").map(String.init), b.count == 2 {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.model.ambient(.badge(symbol: b[0], text: b[1], tint: .green), for: 4) }
+        }
+        if let a = ProcessInfo.processInfo.environment["CTRL_SYSTEM"]?.split(separator: "|").map(String.init), a.count == 3 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.model.ambient(.system(symbol: a[0], title: a[1], detail: a[2]), for: 8) }
+        }
+        if let a = ProcessInfo.processInfo.environment["CTRL_ANSWER"]?.split(separator: "|").map(String.init), a.count == 2 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.model.ambient(.answer(title: a[0], text: a[1].replacingOccurrences(of: "\\n", with: "\n")), for: 6) }
         }
         if let s = ProcessInfo.processInfo.environment["CTRL_TIMER"].flatMap(Double.init) {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { _ = Timers.shared.start(s) }
@@ -172,7 +262,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
-        ) { [weak self] _ in MainActor.assumeIsolated { self?.panel?.reposition() } }
+        ) { [weak self] _ in Task { @MainActor in self?.panel?.reposition() } }
     }
 
     private func setUpMenu() {
@@ -189,18 +279,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = main
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "CTRL")
+        let glyph = Bundle.main.image(forResource: "menubar") ?? NSImage(systemSymbolName: "waveform", accessibilityDescription: "CTRL")
+        glyph?.isTemplate = true   // follows light/dark menu bar
+        glyph?.size = .init(width: 18, height: 18)
+        item.button?.image = glyph
         let menu = NSMenu()
-        menu.addItem(withTitle: "Hold left ⌥ Option and speak", action: nil, keyEquivalent: "")
-        menu.addItem(withTitle: "Hold right ⌥ to dictate (just types)", action: nil, keyEquivalent: "")
-        menu.addItem(withTitle: "⌥⇧ to keep listening · tap ⌥ to stop", action: nil, keyEquivalent: "")
-        menu.addItem(withTitle: "Right ⌥⇧ to keep dictating · tap ⌥ to stop", action: nil, keyEquivalent: "")
-        menu.addItem(.separator())
-        menu.addItem(withTitle: "Set TypeSafe API Key…", action: #selector(setKey), keyEquivalent: "")
-        menu.addItem(withTitle: "Edit Vocabulary…", action: #selector(editVocabulary), keyEquivalent: "")
-        menu.addItem(withTitle: "Routines…", action: #selector(editRoutines), keyEquivalent: "")
-        menu.addItem(withTitle: "Rescan Apps", action: #selector(rescan), keyEquivalent: "")
-        menu.addItem(withTitle: "Accessibility Settings…", action: #selector(openAccessibility), keyEquivalent: "")
+        menu.addItem(withTitle: "Settings…", action: #selector(editRoutines), keyEquivalent: ",")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit CTRL", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         for i in menu.items where i.action != #selector(NSApplication.terminate(_:)) { i.target = self }
@@ -208,34 +292,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = item
     }
 
-    @objc private func setKey() {
-        NSApp.activate()
-        let alert = NSAlert()
-        alert.messageText = "TypeSafe API Key"
-        alert.informativeText = "Stored in your Keychain. Get one at typesafe.ai."
-        let field = NSTextField(frame: .init(x: 0, y: 0, width: 300, height: 24))
-        field.placeholderString = "apikey_…"
-        // Prefill from clipboard if it looks like a key.
-        if let clip = NSPasteboard.general.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines),
-           clip.hasPrefix("apikey_") {
-            field.stringValue = clip
-        }
-        alert.accessoryView = field
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel")
-        alert.window.initialFirstResponder = field
-        if alert.runModal() == .alertFirstButtonReturn {
-            let key = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !key.isEmpty { Keychain.save(key) }
+    @objc private func editRoutines() {
+        // The status menu is still tracking when this runs: open on the next turn.
+        DispatchQueue.main.async { [weak self] in
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate()
+            self?.openSettings?()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                NSApp.windows.first { $0.identifier?.rawValue.contains("Settings") == true }?.makeKeyAndOrderFront(nil)
+                NSApp.activate()
+            }
         }
     }
 
-    @objc private func rescan() { AppCatalog.shared.reload() }
-
-    @objc private func editVocabulary() { Vocabulary.open() }
-    @objc private func editRoutines() { routinesWindow.show { [weak self] in self?.model.run($0) } }
-
-    @objc private func openAccessibility() {
-        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
-    }
 }

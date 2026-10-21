@@ -1,3 +1,4 @@
+import AppKit
 import AudioToolbox
 import CoreAudio
 import SwiftUI
@@ -45,6 +46,33 @@ struct LevelBar: View {
     }
 }
 
+/// Brightness keys (built-in and external keyboards) → the same HUD as voice brightness.
+@MainActor
+final class BrightnessKeys {
+    var onChange: ((Int) -> Void)?
+    private var monitor: Any?
+
+    func start() {
+        monitor = NSEvent.addGlobalMonitorForEvents(matching: [.systemDefined, .keyDown]) { [weak self] e in
+            let isBrightness: Bool
+            if e.type == .systemDefined {
+                // NX_SYSDEFINED subtype 8 = special keys; key 2/3 = brightness up/down; 0xA = key down.
+                let code = (e.data1 & 0xFFFF0000) >> 16, down = (e.data1 & 0xFF00) >> 8 == 0xA
+                isBrightness = e.subtype.rawValue == 8 && down && (code == 2 || code == 3)
+            } else {
+                isBrightness = e.keyCode == 144 || e.keyCode == 145   // F15/F14 on some external keyboards
+            }
+            guard isBrightness else { return }
+            // The system applies the step a moment after the key.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                Task { @MainActor in
+                    if let v = SystemController.Brightness.value { self?.onChange?(v) }
+                }
+            }
+        }
+    }
+}
+
 /// Any volume change (keys, Control Center, other apps) → callback with 0–100 (0 when muted).
 @MainActor
 final class VolumeObserver {
@@ -57,10 +85,10 @@ final class VolumeObserver {
     }
 
     private lazy var levelBlock: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-        DispatchQueue.main.async { MainActor.assumeIsolated { self?.report() } }
+        DispatchQueue.main.async { Task { @MainActor in self?.report() } }
     }
     private lazy var deviceBlock: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-        DispatchQueue.main.async { MainActor.assumeIsolated { self?.attach() } }
+        DispatchQueue.main.async { Task { @MainActor in self?.attach() } }
     }
 
     func start() {

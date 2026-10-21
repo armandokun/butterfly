@@ -22,6 +22,17 @@ struct CommandRouter {
         case clickVisual(NSRunningApplication, what: String)   // not in the accessibility tree: find it on a screenshot
         case menu(MenuReader.Item, NSRunningApplication)
         case routine(Routine)
+        case calendar(Agenda.Action)
+        case navigate(KeyCommands.Nav)
+        case edit(KeyCommands.Edit)
+        case screen(ScreenReader.Action, request: String)
+        case undo                                // CTRL's own last action, else ⌘Z
+        case quickSetting(String, on: Bool)
+        case audioOutput(AudioOutput.Device)
+        case audioOutputBluetooth(name: String, address: String)   // paired but not connected yet
+        case pasteHistory(Clipboard.Item)
+        case clipboardList
+        case agent(String)                       // second layer: the on-device LLM plans and does it
         case unsure(best: InstalledApp?)
         case needAddress
         case notACommand
@@ -41,6 +52,7 @@ struct CommandRouter {
     func route(_ transcript: String, menu: MenuReader.Snapshot? = nil, front: NSRunningApplication? = nil, elements: [Clicker.Element] = [],
                previous: String? = nil, dictating: Bool = false) async throws -> Outcome {
         let catalog = AppCatalog.shared
+        let transcript = catalog.resolvingGenericNames(transcript)
         // Spotlight runs while Jev decides; only used if the answer is "find a file".
         let fileSearch = Task.detached { await Files.search(transcript) }
         defer { fileSearch.cancel() }
@@ -77,13 +89,21 @@ struct CommandRouter {
                 "previous_track": "go back to the previous song, or replay the last track",
                 "now_playing": "ask what song/track is playing, who sings this, or to show the music player / now playing",
                 "timer": "set, start, cancel, or check a timer / countdown (e.g. 'set a timer for 5 minutes', 'how long is left on my timer', 'remind me in 10 minutes')",
-                "focus": "turn a Focus mode on or off: Do Not Disturb, Work, Sleep, Personal, Gaming… ('don't disturb me', 'focus mode', 'turn off do not disturb')",
+                "focus": "turn a Focus mode on or off (not Stage Manager): Do Not Disturb, Work, Sleep, Personal, Gaming… ('don't disturb me', 'focus mode', 'turn off do not disturb')",
                 "connect": "connect or disconnect a specific Bluetooth device (AirPods, headphones, speaker, keyboard, controller) or join a specific Wi-Fi network by name",
-                "settings": "open a specific System Settings page, check or change a Mac setting (Wi-Fi, Bluetooth, dark mode, battery, storage, display settings, notifications, privacy, keyboard, updates, etc.)",
-                "system": "change the volume (louder, quieter, mute, unmute) or screen brightness, lock the screen, put the Mac to sleep, turn the display off, take a screenshot, or empty the Trash",
+                "settings": "open a specific System Settings page, check or change a Mac setting (menu bar always shown or auto-hidden, Dock auto-hide, Stage Manager, battery percentage in the menu bar, Night Shift, Bluetooth on/off, desktop icons, hidden files, Wi-Fi, Bluetooth, dark mode, battery settings, storage, display settings, notifications, privacy, keyboard, updates, etc.)",
+                "system": "change the volume (louder, quieter, mute, unmute) or screen brightness, lock the screen, put the Mac to sleep, turn the display off, take a screenshot, empty the Trash, or ask how much battery is left / whether it's charging",
                 "window": "move, snap, resize, center, maximize, minimize, close, or full-screen the current window (or a named app's window), send it to another screen, or hide or quit an app that's already open, or hide all other apps",
                 "click": "click, press, tap, or select something visible on screen: a button, link, tab, field, message, item, desktop widget, Dock icon, or menu bar icon (e.g. 'click send', 'press the blue button', 'click the first result', 'click the weather widget')",
                 "files": "open a folder (Downloads, Desktop, Documents, iCloud), open the latest download or screenshot, or find / open a specific file or document on the Mac. 'Show me the desktop' means the Desktop folder",
+                "calendar": "only ASK about the existing calendar (not adding anything), schedule, meetings, or events (what's next, what's on today/tomorrow, am I free), or join the current/next meeting or video call",
+                "navigate": "scroll up or down, go to the top or bottom of the page, go back or forward a page, next or previous tab, reopen the closed tab, or switch back to the previous app",
+                "edit": "edit text in the current text field: select or delete the last word, sentence, or line, 'scratch that', select all, copy (also 'copy that', 'copy this'), cut, paste, redo, new line, new paragraph, go to the end/start",
+                "screen": "summarize, explain, or read aloud what's on screen (page, article, email, error, document), answer a question about it, write a reply to the message on screen, or stop reading aloud",
+                "task": "a request that needs understanding content and doing something with it, or several steps: take something on screen (a message, email, invite, page) and put it somewhere — calendar, reminders, a note — e.g. 'grab the last message and put it in my calendar', 'add this to my reminders', 'make an event from this email', 'remind me to call mom tomorrow at 5'. Any request to ADD, create, or schedule a calendar event or reminder ('add a dentist appointment on Nov 3 to my calendar')",
+                "undo": "undo, revert, or take back the last thing that was done: 'undo', 'undo that', 'put it back', 'revert that', 'never mind'",
+                "audio_output": "switch, change, or route the sound / audio output to a device: AirPods, headphones, speakers, the MacBook speakers, the TV / monitor ('play sound through my AirPods', 'switch audio to speakers', 'output to headphones')",
+                "clipboard": "paste or bring back something copied EARLIER (not just 'paste'): 'paste the link I copied before', 'paste what I copied 2 things ago', 'paste the address from earlier', or show / list clipboard history ('what did I copy')",
                 "type": "type, write, or enter specific words/text into the current text field (e.g. 'type see you at 5', 'write hello world and press enter')",
                 "none": "anything else, or nothing actionable",
             ]),
@@ -112,8 +132,29 @@ struct CommandRouter {
             "folder": Files.folderQuestion,
             "reveal": Files.revealQuestion,
             "level": SystemController.levelQuestion,
+            "calendar_action": Agenda.actionQuestion,
+            "quick_setting": QuickSettings.question,
+            "quick_on": .noul("Does the user want that setting on / shown / enabled / always (yes), rather than off / hidden / disabled / auto-hidden (no)?"),
+            "nav_action": KeyCommands.navQuestion,
+            "edit_action": KeyCommands.editQuestion,
+            "screen_action": ScreenReader.actionQuestion,
         ]
         if let q = RoutineStore.shared.question { questions["routine"] = q }
+        let outputs = AudioOutput.devices
+        let audioPaired = Bluetooth.shared.paired.filter { d in
+            !d.connected && ["airpods", "headphones", "hifispeaker"].contains { d.symbol.hasPrefix($0) } && !outputs.contains { $0.name == d.name }
+        }
+        if !outputs.isEmpty {
+            var o = ["none": "none of these: the device the user named isn't listed"]
+            for (i, d) in outputs.enumerated() { o["a\(i)"] = "the audio output “\(d.name)”" + (d.bluetooth ? " (Bluetooth)" : "") + (d.id == AudioOutput.current ? " (current)" : "") }
+            for d in audioPaired.prefix(20) { o["b:" + d.address] = "the Bluetooth audio device “\(d.name)” (paired, not connected yet)" }
+            questions["audio_target"] = .choice("Which audio output device does the user want the sound to go to? Speech-to-text may misspell names.", options: o)
+        }
+        let clips = Clipboard.shared.options
+        if !clips.isEmpty {
+            questions["clip_item"] = .choice("Which previously copied item does the user want pasted? Match its content ('the link' = a URL, 'the address' = a street address) or its order ('before' / 'the previous one' = copied just before the current one).", options: clips)
+            questions["clip_list"] = .noul("Does the user want to SEE / list the clipboard history (yes), rather than paste an item (no)?")
+        }
         if case .choice(let text, var intents) = questions["intent"]! {
             if let previous {
                 intents["repeat"] = "do the previous command (“\(previous)”) again, e.g. 'this one too', 'this one as well', 'again', 'one more time', 'same here', 'do it again'"
@@ -201,7 +242,7 @@ struct CommandRouter {
         let response = try await client.systemOne(state: state, questions: questions)
 
         if ProcessInfo.processInfo.environment["CTRL_DEBUG"] == "1" {
-            for k in ["intent", "routine", "target1", "windows", "layout", "settings_page", "settings_action", "menu_item", "system_action", "timer_action", "timer_duration", "focus_mode", "connect_target", "window_action", "click_target", "files_action", "folder", "level"] {
+            for k in ["intent", "routine", "target1", "windows", "layout", "settings_page", "settings_action", "menu_item", "system_action", "timer_action", "timer_duration", "focus_mode", "connect_target", "window_action", "click_target", "calendar_action", "quick_setting", "audio_target", "clip_item", "nav_action", "edit_action", "screen_action", "files_action", "folder", "level"] {
                 if let a = response.choice(k) { print("  \(k): \(a.choice) (\(String(format: "%.2f", a.confidence)))") }
             }
             for (q, option) in checks.sorted(by: { $0.key < $1.key }) {
@@ -210,6 +251,11 @@ struct CommandRouter {
         }
 
         var intent = response.choice("intent")?.choice
+        // Two or more apps/sites + an arrangement is always "arrange these", never "move this one window".
+        if intent == "window", response.choice("layout").map({ $0.choice != "none" }) == true,
+           checks.filter({ (response.noul($0.key) ?? 0) >= Self.extraThreshold }).count >= 2 {
+            intent = "open"
+        }
         // "Type …" / "Dictate …" at the start is always typing, however long the text is.
         if Typer.startsWithTrigger(transcript) { intent = "type" }
         if intent == "repeat" { return previous == nil ? .notACommand : .repeatLast }
@@ -220,6 +266,36 @@ struct CommandRouter {
         // Routines first: your own phrases beat generic intents.
         if let r = response.choice("routine"), r.choice != "none", r.confidence >= 0.6, let routine = RoutineStore.shared.routine(named: r.choice) {
             return .routine(routine)
+        }
+        if intent == "undo" { return .undo }
+        if intent == "audio_output", let a = response.choice("audio_target") {
+            // "none" vs a device whose name you actually said: the name wins.
+            var pick = a.choice
+            if pick == "none" {
+                let named = a.probabilities.filter { $0.key != "none" && $0.value >= 0.2 }.sorted { $0.value > $1.value }.first { p in
+                    let name = p.key.hasPrefix("b:") ? audioPaired.first { "b:" + $0.address == p.key }?.name : Int(p.key.dropFirst()).flatMap { outputs.indices.contains($0) ? outputs[$0].name : nil }
+                    return name.map { Self.mentions(spoken.replacingOccurrences(of: "air pods", with: "airpods"), $0) } ?? false
+                }
+                if let named { pick = named.key }
+            }
+            if pick.hasPrefix("b:"), let d = audioPaired.first(where: { "b:" + $0.address == pick }) {
+                return .audioOutputBluetooth(name: d.name, address: d.address)
+            }
+            if pick.hasPrefix("a"), let i = Int(pick.dropFirst()), outputs.indices.contains(i) { return .audioOutput(outputs[i]) }
+            return .notACommand
+        }
+        if intent == "clipboard" {
+            if (response.noul("clip_list") ?? 0) >= 0.5 || clips.isEmpty { return .clipboardList }
+            if let a = response.choice("clip_item"), let item = Clipboard.shared.item(a.choice) { return .pasteHistory(item) }
+        }
+        if intent == "task" { return .agent(transcript) }
+        if intent == "calendar", let a = response.choice("calendar_action"), let action = Agenda.Action(rawValue: a.choice) { return .calendar(action) }
+        if intent == "navigate", let a = response.choice("nav_action"), let action = KeyCommands.Nav(rawValue: a.choice) { return .navigate(action) }
+        if intent == "edit", let a = response.choice("edit_action"), let action = KeyCommands.Edit(rawValue: a.choice) {
+            return action == .undo ? .undo : .edit(action)
+        }
+        if intent == "screen", let a = response.choice("screen_action"), let action = ScreenReader.Action(rawValue: a.choice) {
+            return .screen(action, request: transcript)
         }
         if intent == "menu_command", let menu, let a = response.choice("menu_item"), let item = menuOptions[a.choice] {
             return a.confidence >= 0.4 ? .menu(item, menu.app) : .notACommand
@@ -282,8 +358,15 @@ struct CommandRouter {
             return .timer(action, seconds: Timers.seconds(in: normalized) ?? jev)
         }
         if intent == "system", let a = response.choice("system_action"), let action = SystemController.Action(rawValue: a.choice) {
+            // "show battery percentage" is the menu bar setting, not a question.
+            if action == .battery, normalized.firstMatch(of: #/\b(show|hide|display|turn (on|off))\b.*\bpercent/#) != nil {
+                return .quickSetting("battery_percent", on: normalized.firstMatch(of: #/\b(hide|turn off)\b/#) == nil)
+            }
             let jevLevel = response.choice("level").flatMap { $0.choice == "none" ? nil : $0.choice }
             return .system(action, level: SystemController.level(in: normalized, jev: jevLevel))
+        }
+        if intent == "settings", let q = response.choice("quick_setting"), q.choice != "none", q.confidence >= 0.55, QuickSettings.setting(q.choice) != nil {
+            return .quickSetting(q.choice, on: (response.noul("quick_on") ?? 1) >= 0.5)
         }
         if intent == "settings", let p = response.choice("settings_page"), let page = SettingsController.page(p.choice) {
             // "open system settings" / "open settings" with nothing else → just the app.

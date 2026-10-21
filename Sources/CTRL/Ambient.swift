@@ -321,7 +321,7 @@ final class FileDrops {
             let fd = open(dir.path, O_EVTONLY)
             guard fd >= 0 else { continue }
             let s = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: .write, queue: .main)
-            s.setEventHandler { [weak self] in MainActor.assumeIsolated { self?.scan(kind, dir) } }
+            s.setEventHandler { [weak self] in Task { @MainActor in self?.scan(kind, dir) } }
             s.setCancelHandler { close(fd) }
             s.resume()
             sources.append(s)

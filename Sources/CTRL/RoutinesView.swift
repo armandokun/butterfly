@@ -1,119 +1,66 @@
 import AppKit
 import SwiftUI
 
-/// Menu bar → Routines…: create and edit routines.
-struct RoutinesView: View {
-    @ObservedObject var store: RoutineStore
-    var run: (Routine) -> Void
-    @State private var selection: Routine.ID?
-
-    var body: some View {
-        NavigationSplitView {
-            List(selection: $selection) {
-                ForEach(store.routines) { r in
-                    Text(r.name.isEmpty ? "Untitled" : r.name)
-                        .foregroundStyle(r.name.isEmpty ? .secondary : .primary)
-                        .tag(r.id)
-                }
-            }
-            .safeAreaInset(edge: .bottom) {
-                HStack(spacing: 0) {
-                    Button { add() } label: { Image(systemName: "plus").frame(width: 24, height: 22) }
-                        .help("New routine")
-                    Button { remove() } label: { Image(systemName: "minus").frame(width: 24, height: 22) }
-                        .disabled(selection == nil)
-                        .help("Delete routine")
-                    Spacer()
-                }
-                .buttonStyle(.borderless)
-                .padding(6)
-            }
-            .navigationSplitViewColumnWidth(min: 160, ideal: 180)
-        } detail: {
-            if let i = store.routines.firstIndex(where: { $0.id == selection }) {
-                RoutineEditor(routine: $store.routines[i], run: run)
-                    .id(store.routines[i].id)
-            } else {
-                ContentUnavailableView {
-                    Label(store.routines.isEmpty ? "No Routines" : "No Selection", systemImage: "list.bullet.rectangle")
-                } description: {
-                    Text("A routine runs several commands from one phrase, like “work mode”.")
-                } actions: {
-                    Button("New Routine") { add() }
-                }
-            }
-        }
-        .frame(minWidth: 620, minHeight: 400)
-        .onAppear { if selection == nil { selection = store.routines.first?.id } }
-    }
-
-    private func add() {
-        let r = Routine()
-        store.routines.append(r)
-        selection = r.id
-    }
-
-    private func remove() {
-        guard let i = store.routines.firstIndex(where: { $0.id == selection }) else { return }
-        store.routines.remove(at: i)
-        selection = store.routines.indices.contains(i) ? store.routines[i].id : store.routines.last?.id
-    }
-}
-
-private struct RoutineEditor: View {
+struct RoutineEditor: View {
     @Binding var routine: Routine
     var run: (Routine) -> Void
     @FocusState private var focusedStep: Routine.Step.ID?
 
     var body: some View {
-        Form {
-            Section {
-                TextField("Name", text: $routine.name, prompt: Text("Work mode"))
-                TextField("Say it like", text: $routine.phrases, prompt: Text("work mode, let's get to work"), axis: .vertical)
-                    .lineLimit(1...3)
-            } footer: {
-                Text("Phrases you'd say to start it, separated by commas.")
-                    .foregroundStyle(.secondary)
-            }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(routine.name.isEmpty ? "Untitled" : routine.name)
+                        .font(Pond.display(28))
+                        .foregroundStyle(Pond.ink)
+                        .padding(.horizontal, 8)
+                        .background(Pond.lavender)
+                    Spacer()
+                    Button("▶ Run now") { run(routine) }
+                        .buttonStyle(.pond(Pond.peach))
+                        .disabled(!routine.isRunnable)
+                        .help(routine.isRunnable ? "Run this routine" : "Add a name and at least one step")
+                }
 
-            Section {
-                ForEach($routine.steps) { $step in
-                    HStack {
-                        Text("\((routine.steps.firstIndex(of: step) ?? 0) + 1).")
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                            .frame(width: 20, alignment: .trailing)
-                        TextField("Step", text: $step.text, prompt: Text("open cursor and slack side by side"))
-                            .labelsHidden()
-                            .focused($focusedStep, equals: step.id)
-                            .onSubmit { addStep(after: step.id) }
-                        Button {
-                            routine.steps.removeAll { $0.id == step.id }
-                        } label: {
-                            Image(systemName: "minus.circle.fill").foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.borderless)
-                        .disabled(routine.steps.count == 1)
-                        .help("Remove step")
+                PondSection(title: "Trigger", tint: Pond.lime, footer: "Phrases you'd say to start it, separated by commas.") {
+                    PondRow(title: "Name") { PondField(prompt: "Work mode", text: $routine.name).frame(width: 220) }
+                    PondRow(title: "Say it like", last: true) {
+                        PondField(prompt: "work mode, let's get to work", text: $routine.phrases).frame(width: 220)
                     }
                 }
-                .onMove { routine.steps.move(fromOffsets: $0, toOffset: $1) }
 
-                Button("Add Step", systemImage: "plus") { addStep(after: routine.steps.last?.id) }
-                    .buttonStyle(.borderless)
-            } header: {
-                Text("Steps")
-            } footer: {
-                Text("Each step is anything you'd say to CTRL: “open slack”, “play some music”, “switch to dark mode”.")
-                    .foregroundStyle(.secondary)
+                PondSection(title: "Steps", tint: Pond.teal,
+                            footer: "Each step is anything you'd say to CTRL: “open slack”, “play some music”, “switch to dark mode”.") {
+                    ForEach(Array(routine.steps.enumerated()), id: \.element.id) { i, step in
+                        let binding = Binding(get: { routine.steps.first { $0.id == step.id }?.text ?? "" },
+                                              set: { t in if let j = routine.steps.firstIndex(where: { $0.id == step.id }) { routine.steps[j].text = t } })
+                        VStack(spacing: 0) {
+                            HStack(spacing: 8) {
+                                Text("\(i + 1)").font(Pond.label).foregroundStyle(Pond.ink)
+                                    .frame(width: 20, height: 20).background(Pond.lime)
+                                TextField("", text: binding, prompt: Text("open cursor and slack side by side"))
+                                    .textFieldStyle(.plain).font(Pond.body).foregroundStyle(Pond.ink)
+                                    .focused($focusedStep, equals: step.id)
+                                    .onSubmit { addStep(after: step.id) }
+                                Button("−") { routine.steps.removeAll { $0.id == step.id } }
+                                    .buttonStyle(.pond(Pond.rose))
+                                    .disabled(routine.steps.count == 1)
+                                    .help("Remove step")
+                            }
+                            .padding(.horizontal, 12).padding(.vertical, 7)
+                            Rectangle().fill(Pond.ink.opacity(0.08)).frame(height: 1)
+                        }
+                    }
+                    HStack {
+                        Button("+ Add step") { addStep(after: routine.steps.last?.id) }.buttonStyle(.pond(Pond.teal))
+                        Spacer()
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                }
             }
+            .padding(20)
         }
-        .formStyle(.grouped)
-        .toolbar {
-            Button("Run Now", systemImage: "play.fill") { run(routine) }
-                .disabled(!routine.isRunnable)
-                .help(routine.isRunnable ? "Run this routine" : "Add a name and at least one step")
-        }
+        .scrollContentBackground(.hidden)
     }
 
     private func addStep(after id: Routine.Step.ID?) {
@@ -121,24 +68,5 @@ private struct RoutineEditor: View {
         let i = routine.steps.firstIndex { $0.id == id }.map { $0 + 1 } ?? routine.steps.count
         routine.steps.insert(new, at: i)
         focusedStep = new.id
-    }
-}
-
-@MainActor
-final class RoutinesWindow {
-    private var window: NSWindow?
-
-    func show(run: @escaping (Routine) -> Void) {
-        if window == nil {
-            let w = NSWindow(contentViewController: NSHostingController(rootView: RoutinesView(store: .shared, run: run)))
-            w.title = "Routines"
-            w.styleMask = [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView]
-            w.setContentSize(.init(width: 680, height: 440))
-            w.isReleasedWhenClosed = false
-            w.center()
-            window = w
-        }
-        NSApp.activate()
-        window?.makeKeyAndOrderFront(nil)
     }
 }

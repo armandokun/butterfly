@@ -37,16 +37,21 @@ final class Timers: ObservableObject {
     ])
 
     func start(_ seconds: TimeInterval, label: String? = nil) -> Timer {
-        let t = Timer(label: label, total: seconds, ends: Date().addingTimeInterval(seconds))
+        schedule(Timer(label: label, total: seconds, ends: Date().addingTimeInterval(seconds)))
+    }
+
+    @discardableResult private func schedule(_ t: Timer) -> Timer {
         active.append(t)
         tasks[t.id] = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(seconds))
+            try? await Task.sleep(for: .seconds(t.remaining))
             guard !Task.isCancelled, let self else { return }
             self.active.removeAll { $0.id == t.id }
             self.tasks[t.id] = nil
+            self.save()
             NSSound(named: "Glass")?.play()
             self.onFinish?(t)
         }
+        save()
         return t
     }
 
@@ -55,7 +60,39 @@ final class Timers: ObservableObject {
         tasks.values.forEach { $0.cancel() }
         tasks = [:]
         active = []
+        save()
         return n
+    }
+
+    /// Undo for "set a timer".
+    func cancelNewest() {
+        guard let t = active.max(by: { $0.ends.timeIntervalSince1970 - $0.total < $1.ends.timeIntervalSince1970 - $1.total }) else { return }
+        tasks[t.id]?.cancel()
+        tasks[t.id] = nil
+        active.removeAll { $0.id == t.id }
+        save()
+    }
+
+    // MARK: Survive restarts
+
+    private static let key = "timers"
+    private func save() {
+        UserDefaults.standard.set(active.map { ["label": $0.label ?? "", "total": $0.total, "ends": $0.ends.timeIntervalSince1970] }, forKey: Self.key)
+    }
+
+    /// At launch: timers still running come back; ones that ended while CTRL was closed (≤10 min ago) ring now.
+    func restore() {
+        let saved = UserDefaults.standard.array(forKey: Self.key) as? [[String: Any]] ?? []
+        for d in saved {
+            guard let total = d["total"] as? Double, let ends = d["ends"] as? Double else { continue }
+            let label = (d["label"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            let t = Timer(label: label, total: total, ends: Date(timeIntervalSince1970: ends))
+            if t.remaining > 0 { schedule(t) }
+            else if -t.ends.timeIntervalSinceNow < 600 {
+                Task { try? await Task.sleep(for: .seconds(1.5)); NSSound(named: "Glass")?.play(); self.onFinish?(t) }
+            }
+        }
+        save()
     }
 
     // MARK: Parsing "five minutes", "1 hour and 30 minutes", "90 seconds", "an hour and a half"

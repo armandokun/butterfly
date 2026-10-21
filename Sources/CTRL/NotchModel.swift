@@ -1,4 +1,5 @@
 import AppKit
+import EventKit
 import AVFoundation
 import Speech
 import SwiftUI
@@ -18,6 +19,7 @@ final class NotchModel: ObservableObject {
         case nowPlaying              // expanded player card (the compact one shows whenever music plays)
         case timerDone(String)       // expanded "Timer done" alert
         case badge(symbol: String, text: String, tint: Color)   // compact: icon left, short text right
+        case answer(title: String, text: String)                // expanded, a few lines (screen summaries, agenda)
     }
 
     /// Background events (volume keys, battery, Wi-Fi…): only when the notch isn't busy with you.
@@ -35,38 +37,39 @@ final class NotchModel: ObservableObject {
     func startObservers() {
         volumeObserver.onChange = { [weak self] v in self?.ambient(.level(.volume, v), for: 1.4) }
         volumeObserver.start()
-        // New song → show the card briefly; afterwards the compact player stays beside the notch.
-        NowPlaying.shared.onChange = { [weak self] old, new in
-            guard let new, new.playing, old?.id != new.id || old?.playing == false else { return }
-            self?.ambient(.nowPlaying, for: 2.6)
-        }
-        NowPlaying.shared.start()
+        NowPlaying.shared.start()   // for "what's playing" / media commands; no automatic popups
         Timers.shared.onFinish = { [weak self] t in
             // Always shown, even mid-command: it's what you asked for.
             self?.show(.timerDone(t.label ?? Timers.spoken(t.total) + " timer"), for: 6)
         }
-        WiFi.shared.onChange = { [weak self] ssid, on in
-            if !on { self?.ambient(.badge(symbol: "wifi.slash", text: "Wi-Fi off", tint: .white.opacity(0.6))) }
-            else if let ssid { self?.ambient(.badge(symbol: "wifi", text: ssid, tint: .blue)) }
-            else { self?.ambient(.badge(symbol: "wifi.exclamationmark", text: "Disconnected", tint: .orange)) }
-        }
         WiFi.shared.start()
-        Bluetooth.shared.onChange = { [weak self] name, symbol, battery, connected in
-            let text = connected ? (battery.map { "\($0)%" } ?? "Connected") : "Disconnected"
-            let tint: Color = !connected ? .white.opacity(0.6) : (battery ?? 100) <= 20 ? .red : .green
-            self?.ambient(.badge(symbol: symbol, text: text, tint: tint), for: 2.2)
-            Memory.record(said: "(automatic)", did: "\(name) \(connected ? "connected" : "disconnected")" + (battery.map { ", battery \($0)%" } ?? ""))
-        }
         Bluetooth.shared.start()
-        FileDrops.shared.onNew = { [weak self] kind, url in
-            let what = kind == .download ? "Downloaded" : "Screenshot saved"
-            self?.ambient(.media(InstalledApp(name: url.lastPathComponent, url: url), title: url.lastPathComponent,
-                                 detail: "\(what) · say “open it”"), for: 3)
-            // So "open it" / "show it in Finder" right after works.
-            Memory.record(said: "(automatic)", did: "\(kind == .download ? "new download" : "new screenshot"): \(url.path)")
+        Battery.shared.onEvent = { [weak self] b, event in
+            switch event {
+            case .low: self?.ambient(.badge(symbol: "battery.25percent", text: "\(b.percent)% left", tint: .orange), for: 3.5)
+            case .plugged, .unplugged, .full: break
+            case .critical:
+                NSSound(named: "Funk")?.play()
+                self?.ambient(.badge(symbol: "battery.0percent", text: "\(b.percent)% · plug in", tint: .red), for: 5)
+            }
         }
-        FileDrops.shared.start()
+        Battery.shared.start()
+        Agenda.shared.onSoon = { [weak self] e, minutes in
+            NSSound(named: "Tink")?.play()
+            let join = Agenda.meetingURL(e) != nil ? " · say “join my meeting”" : ""
+            self?.ambient(.system(symbol: "calendar.badge.clock", title: e.title ?? "Meeting", detail: "In \(minutes) min\(join)"), for: 6)
+            Memory.record(said: "(automatic)", did: "reminded: \(e.title ?? "meeting") starts in \(minutes) min")
+        }
+        Agenda.shared.start()
+        brightnessKeys.onChange = { [weak self] v in self?.ambient(.level(.brightness, v), for: 1.4) }
+        brightnessKeys.start()
+        KeyCommands.startTracking()
+        Clipboard.shared.start()
+        Timers.shared.restore()
     }
+    private let brightnessKeys = BrightnessKeys()
+    private var lastTyped: String?
+    private var peakLevel: CGFloat = 0   // loudest sound this press: 0 = the mic heard nothing
 
     @Published var phase: Phase = .idle
     @Published var transcript = ""
@@ -93,6 +96,7 @@ final class NotchModel: ObservableObject {
         case .level(let k, let v): did = "\(k == .volume ? "volume" : "brightness") set to \(v)%"
         case .nowPlaying: did = NowPlaying.shared.track.map { "now playing: \($0.title)" + ($0.artist.map { " by \($0)" } ?? "") + ($0.playing ? "" : " (paused)") } ?? "music"
         case .timerDone(let l): did = "\(l) finished"
+        case .answer(let title, let text): did = "\(title): \(text.prefix(120))"
         case .badge(_, let text, _): did = text
             if case .focus(let m) = outcome { did = m == "off" ? "Focus turned off" : "\(m) Focus turned on" }
             if case .bluetooth(let n, _, let c) = outcome { did = "\(n) \(c ? "connected" : "disconnected") (\(text))" }
@@ -128,6 +132,7 @@ final class NotchModel: ObservableObject {
         recorder.onSegment = { [weak self] text in self?.enqueue(text) }
         recorder.onLevel = { [weak self] level in
             guard let self else { return }
+            self.peakLevel = max(self.peakLevel, CGFloat(level))
             self.levels.removeFirst()
             self.levels.append(CGFloat(level))
         }
@@ -333,13 +338,21 @@ final class NotchModel: ObservableObject {
         Task {
             await startTask?.value
             let text = await recorder.stop()
-            guard !text.isEmpty else { return close() }
+            let silent = peakLevel < 0.02
+            peakLevel = 0
+            guard !text.isEmpty else {
+                // Total silence = wrong or muted mic, not a quiet voice: say which one, and where to change it.
+                if silent { return show(.system(symbol: "mic.slash", title: "Heard nothing", detail: "Using \(recorder.micName ?? "no microphone") · change it in Settings"), for: 3) }
+                return close()
+            }
             if dictationOnly {
                 dictationOnly = false
                 close()
                 frontApp?.activate()
                 try? await Task.sleep(for: .milliseconds(80))
                 await Typer.type(text, pressReturn: false)
+                lastTyped = text
+                registerTypedUndo(text)
                 Memory.record(said: text, did: "typed (dictation)", app: frontApp?.localizedName)
                 return
             }
@@ -421,7 +434,55 @@ final class NotchModel: ObservableObject {
     }
 
     private func perform(_ outcome: CommandRouter.Outcome) async {
+            if case .undo = outcome {} else if case .notACommand = outcome {} else { prepareUndo(outcome) }
             switch outcome {
+            case .undo:
+                if let step = Undo.pop() {
+                    await step.run()
+                    show(.system(symbol: "arrow.uturn.backward", title: "Undid", detail: step.what), for: 1.4)
+                } else {
+                    frontApp?.activate()
+                    try? await Task.sleep(for: .milliseconds(60))
+                    Keys.press(6, flags: .maskCommand)   // ⌘Z
+                    show(.system(symbol: "arrow.uturn.backward", title: "Undo", detail: frontApp?.localizedName), for: 1.2)
+                }
+            case .calendar(let action): await calendar(action)
+            case .navigate(let action):
+                let r = await KeyCommands.perform(action, in: frontApp)
+                show(.system(symbol: r.symbol, title: r.title, detail: r.detail), for: 0.9)
+            case .edit(let action):
+                let r = await KeyCommands.perform(action, in: frontApp, typed: lastTyped)
+                if action == .scratch { lastTyped = nil }
+                show(.system(symbol: r.symbol, title: r.title, detail: r.detail), for: 1.0)
+            case .screen(let action, let request): await screen(action, request: request)
+            case .agent(let request): await agent(request)
+            case .quickSetting(let key, let on):
+                guard let s = QuickSettings.setting(key) else { break }
+                let before = s.get()
+                let r = QuickSettings.apply(s, on: on)
+                if let before { Undo.register("\(s.title) back \(before ? "on" : "off")") { s.set(before) } }
+                show(.system(symbol: r.symbol, title: r.title, detail: nil), for: 1.6)
+            case .audioOutput(let d):
+                let ok = AudioOutput.set(d.id)
+                show(ok ? .badge(symbol: AudioOutput.symbol(d.name), text: d.name, tint: .blue) : .message("Couldn't switch to \(d.name)"), for: 1.8)
+            case .audioOutputBluetooth(let name, let address):
+                show(.system(symbol: AudioOutput.symbol(name), title: "Connecting \(name)…", detail: nil), for: 12)
+                guard await Bluetooth.shared.connect(address, on: true) else { show(.message("Couldn't connect \(name)"), for: 2); break }
+                // The audio device shows up a moment after the Bluetooth link.
+                var dev: AudioOutput.Device?
+                for _ in 0..<20 {
+                    dev = AudioOutput.devices.first { $0.name == name }
+                    if dev != nil { break }
+                    try? await Task.sleep(for: .milliseconds(300))
+                }
+                if let dev { AudioOutput.set(dev.id) }
+                show(.badge(symbol: AudioOutput.symbol(name), text: name, tint: dev != nil ? .blue : .orange), for: 1.8)
+            case .pasteHistory(let item):
+                close()
+                await Clipboard.shared.paste(item, into: frontApp)
+            case .clipboardList:
+                let list = Clipboard.shared.items.prefix(5).map { "· " + $0.text.prefix(60).replacingOccurrences(of: "\n", with: " ") }
+                show(list.isEmpty ? .message("Nothing copied yet") : .answer(title: "Clipboard", text: list.joined(separator: "\n")), for: 5)
             case .routine: break   // handled by the caller; routines don't nest
             case .type(let text, let pressReturn):
                 frontApp?.activate()
@@ -429,6 +490,7 @@ final class NotchModel: ObservableObject {
                 try? await Task.sleep(for: .milliseconds(120))
                 await Typer.type(text, pressReturn: pressReturn)
                 typedInDictation = true
+                lastTyped = text
             case .continueTyping(let text):
                 frontApp?.activate()
                 close()
@@ -436,7 +498,7 @@ final class NotchModel: ObservableObject {
                 if let t = Typer.finishText(text) {
                     let space = typedInDictation && !t.text.isEmpty ? " " : ""
                     await Typer.type(space + t.text, pressReturn: t.pressReturn)
-                    if !t.text.isEmpty { typedInDictation = true }
+                    if !t.text.isEmpty { typedInDictation = true; lastTyped = space + t.text }
                 }
             case .startDictation:
                 typedInDictation = false
@@ -514,9 +576,14 @@ final class NotchModel: ObservableObject {
                 if let l = r.level { show(.level(l.kind, l.value), for: 1.6); break }
                 show(.system(symbol: r.symbol, title: r.title, detail: r.detail), for: action == .screenshotFull ? 0.6 : 1.4)
             case .menu(let item, let app):
-                MenuReader.press(item, in: app)
+                let ok = await MenuReader.press(item, in: app)
                 let icon = app.bundleURL.map { InstalledApp(name: app.localizedName ?? "", url: $0) }
-                show(.media(icon, title: item.title, detail: item.path.dropLast().joined(separator: " → ")), for: 1.6)
+                if ok {
+                    show(.media(icon, title: item.title, detail: "✓ Done · " + item.path.dropLast().joined(separator: " → ") + " · say “undo” to revert"), for: 1.8)
+                } else {
+                    Undo.clear()
+                    show(.media(icon, title: "Couldn't \(item.title.lowercased())", detail: "\(app.localizedName ?? "The app") didn't accept it"), for: 2.2)
+                }
             case .open(let plan): launch(plan)
             case .media(let action, let preferred):
                 if action == .show {
@@ -535,6 +602,200 @@ final class NotchModel: ObservableObject {
             case .needAddress: show(.message("Say the full address, like “facebook dot com”"))
             case .notACommand: show(.message("Try “open Safari” or “open facebook.com”"))
             }
+    }
+
+    // MARK: Undo: remember how to reverse what's about to happen
+
+    private func registerTypedUndo(_ text: String) {
+        let app = frontApp
+        Undo.register("typing") { _ = await KeyCommands.perform(.scratch, in: app, typed: text) }
+    }
+
+    private func prepareUndo(_ outcome: CommandRouter.Outcome) {
+        let app = frontApp
+        switch outcome {
+        case .type(let text, _), .continueTyping(let text):
+            registerTypedUndo(Typer.finishText(text)?.text ?? text)
+        case .system(let action, _):
+            switch action {
+            case .volumeUp, .volumeDown, .volumeSet:
+                let v = SystemController.Audio.volume
+                Undo.register("volume back to \(v)%") { SystemController.Audio.setVolume(v) }
+            case .mute: Undo.register("unmuted") { SystemController.Audio.setMuted(false) }
+            case .unmute: Undo.register("muted") { SystemController.Audio.setMuted(true) }
+            case .brightnessUp, .brightnessDown, .brightnessSet:
+                if let b = SystemController.Brightness.value { Undo.register("brightness back to \(b)%") { SystemController.Brightness.set(b) } }
+            default: Undo.clear()
+            }
+        case .window(let action, let target):
+            let name = target.localizedName ?? "window"
+            switch action {
+            case .hideApp: Undo.register("showed \(name)") { target.unhide() }
+            case .hideOthers:
+                let visible = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular && !$0.isHidden && $0 != target }
+                Undo.register("showed other apps") { visible.forEach { $0.unhide() } }
+            case .quitApp:
+                if let url = target.bundleURL { Undo.register("reopened \(name)") { _ = try? await NSWorkspace.shared.openApplication(at: url, configuration: .init()) } }
+            case .close: Undo.clear()
+            default:
+                if let snap = WindowCommands.snapshot(of: target) { Undo.register("\(name) put back") { await WindowCommands.restore(snap, app: target) } }
+            }
+        case .audioOutput, .audioOutputBluetooth:
+            if let before = AudioOutput.current, let name = AudioOutput.devices.first(where: { $0.id == before })?.name {
+                Undo.register("sound back to \(name)") { AudioOutput.set(before) }
+            }
+        case .focus:
+            let before = Focus.active
+            Undo.register(before.map { "\($0) Focus back on" } ?? "Focus off") { _ = await Focus.set(before ?? "off") }
+        case .timer(.start, _):
+            Undo.register("timer cancelled") { Timers.shared.cancelNewest() }
+        case .bluetooth(let name, let address, let connect):
+            Undo.register("\(name) \(connect ? "disconnected" : "reconnected")") { _ = await Bluetooth.shared.connect(address, on: !connect) }
+        case .menu(let item, let menuApp):
+            let closedTab = item.title.localizedCaseInsensitiveContains("close tab")
+            Undo.register(closedTab ? "reopened tab" : item.title) {
+                menuApp.activate()
+                try? await Task.sleep(for: .milliseconds(80))
+                Keys.press(closedTab ? 17 : 6, flags: closedTab ? [.maskCommand, .maskShift] : .maskCommand)
+            }
+        case .navigate(let nav):
+            let reverse: KeyCommands.Nav? = switch nav {
+            case .scrollDown: .scrollUp
+            case .scrollUp: .scrollDown
+            case .pageDown: .pageUp
+            case .pageUp: .pageDown
+            case .back: .forward
+            case .forward: .back
+            case .nextTab: .previousTab
+            case .previousTab: .nextTab
+            case .previousApp: .previousApp
+            default: nil
+            }
+            if let reverse { Undo.register("went back") { _ = await KeyCommands.perform(reverse, in: app) } } else { Undo.clear() }
+        case .edit(let e):
+            if e == .scratch, let t = lastTyped {
+                Undo.register("put the text back") { app?.activate(); await Typer.type(t, pressReturn: false) }
+            } else if [.copy, .selectAll, .selectWord, .selectLine, .selectSentence, .end, .start].contains(e) {
+                Undo.clear()
+            } else {
+                Undo.register("edit") { app?.activate(); try? await Task.sleep(for: .milliseconds(60)); Keys.press(6, flags: .maskCommand) }
+            }
+        default: Undo.clear()
+        }
+    }
+
+    // MARK: Calendar
+
+    private func calendar(_ action: Agenda.Action) async {
+        let agenda = Agenda.shared
+        guard await agenda.requestAccess() else {
+            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars")!)
+            return show(.message("Allow Calendar access for CTRL"), for: 3)
+        }
+        func line(_ e: EKEvent) -> String { "\(e.isAllDay ? "All day" : e.startDate.formatted(date: .omitted, time: .shortened))  \(e.title ?? "Event")" }
+        switch action {
+        case .next:
+            // Timed events first; an all-day one only when nothing else is coming.
+            guard let e = agenda.next ?? agenda.day(0).first else { return show(.system(symbol: "calendar", title: "Nothing coming up", detail: "Free all week"), for: 2) }
+            let join = Agenda.meetingURL(e) != nil ? " · say “join”" : ""
+            show(.system(symbol: "calendar", title: e.title ?? "Event", detail: Agenda.when(e) + join), for: 4)
+        case .today, .tomorrow:
+            let list = agenda.day(action == .today ? 0 : 1)
+            let day = action == .today ? "today" : "tomorrow"
+            guard !list.isEmpty else { return show(.system(symbol: "calendar", title: "Free \(day)", detail: action == .today ? "Nothing left on your calendar" : "No events"), for: 2) }
+            let title = "\(list.count) event\(list.count == 1 ? "" : "s") \(action == .today ? "left today" : day)"
+            show(.answer(title: title, text: list.prefix(5).map(line).joined(separator: "\n") + (list.count > 5 ? "\n+\(list.count - 5) more" : "")), for: 6)
+        case .join:
+            // The meeting happening now, or the next one starting within 15 minutes.
+            let soon = agenda.events(from: Date(), to: Date().addingTimeInterval(15 * 60)).first { Agenda.meetingURL($0) != nil }
+            guard let e = soon ?? agenda.next, let url = Agenda.meetingURL(e) else {
+                return show(.system(symbol: "video.slash", title: "No meeting link", detail: agenda.next?.title), for: 2)
+            }
+            NSWorkspace.shared.open(url)
+            show(.system(symbol: "video.fill", title: "Joining \(e.title ?? "meeting")", detail: url.host()), for: 2)
+        }
+    }
+
+    // MARK: Second layer (Apple's on-device model plans and calls tools)
+
+    private func agent(_ request: String) async {
+        guard ScreenReader.available else { return show(.message("Turn on Apple Intelligence for this"), for: 3) }
+        let app = frontApp
+        Agent.runCommand = { [weak self] command in
+            guard let self, let router = self.router, let o = try? await router.route(command) else { return "Couldn't do that." }
+            await self.perform(o)
+            return "Done: \(command)"
+        }
+        Agent.typeText = { [weak self] text in
+            app?.activate()
+            try? await Task.sleep(for: .milliseconds(120))
+            await Typer.type(text, pressReturn: false)
+            self?.lastTyped = text
+        }
+        show(.system(symbol: "sparkles", title: "Working on it…", detail: request), for: 45)
+        do {
+            let done = try await Agent.run(request, app: app, client: Keychain.apiKey.map { TypeSafeClient(apiKey: $0) })
+            let created = done.compactMap(\.created)
+            if created.isEmpty { Undo.clear() }
+            else {
+                let what = done.count == 1 ? "removed “\(done[0].text.components(separatedBy: " · ").first ?? "it")”" : "removed \(created.count) items"
+                Undo.register(what) { _ = Agent.remove(created) }
+            }
+            if done.count == 1, let d = done.first {
+                show(.system(symbol: d.symbol, title: d.symbol == "sparkles" ? "Done" : Self.doneTitle(d.symbol), detail: d.text + (d.created != nil ? " · say “undo” to remove" : "")), for: 3.5)
+            } else {
+                show(.answer(title: "Done", text: done.map(\.text).joined(separator: "\n")), for: 4)
+            }
+        } catch {
+            show(.message("Couldn't do it: \(error.localizedDescription)"), for: 3)
+        }
+    }
+
+    private static func doneTitle(_ symbol: String) -> String {
+        switch symbol {
+        case "calendar.badge.plus": "Added to Calendar"
+        case "checklist": "Added to Reminders"
+        case "keyboard": "Typed"
+        default: "Done"
+        }
+    }
+
+    // MARK: Screen (Apple's on-device model)
+
+    private func screen(_ action: ScreenReader.Action, request: String) async {
+        if action == .stopReading {
+            return show(.system(symbol: "speaker.slash.fill", title: ScreenReader.stop() ? "Stopped reading" : "Not reading", detail: nil), for: 1)
+        }
+        let app = frontApp
+        show(.system(symbol: "text.viewfinder", title: "Reading the screen…", detail: app?.localizedName), for: 30)
+        guard let (text, selected) = await ScreenReader.text(of: app) else {
+            let denied = !CGPreflightScreenCaptureAccess()
+            if denied { CGRequestScreenCaptureAccess() }
+            return show(.message(denied ? "Allow Screen Recording for CTRL" : "Nothing to read"), for: 2.5)
+        }
+        if action == .readAloud {
+            ScreenReader.speak(text)
+            return show(.system(symbol: "speaker.wave.2.fill", title: selected ? "Reading selection" : "Reading aloud", detail: "Say “stop reading”"), for: 2)
+        }
+        guard ScreenReader.available else { return show(.message("Turn on Apple Intelligence to use this"), for: 3) }
+        show(.system(symbol: "sparkles", title: action == .reply ? "Writing a reply…" : "Thinking…", detail: selected ? "Selected text" : app?.localizedName), for: 30)
+        do {
+            let answer = try await ScreenReader.answer(action, request: request, text: text, app: app?.localizedName)
+            if action == .reply {
+                app?.activate()
+                close()
+                try? await Task.sleep(for: .milliseconds(150))
+                await Typer.type(answer, pressReturn: false)
+                lastTyped = answer
+                registerTypedUndo(answer)
+                return
+            }
+            let title = switch action { case .summarize: "Summary"; case .explain: "What it says"; default: "Answer" }
+            let seconds = min(20, max(5, Double(answer.split(separator: " ").count) / 3))
+            show(.answer(title: title, text: answer), for: seconds)
+        } catch {
+            show(.message("Couldn't read it: \(error.localizedDescription)"), for: 3)
+        }
     }
 
     private func openSite(_ url: URL) {

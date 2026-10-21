@@ -112,7 +112,9 @@ enum WindowManager {
         let ax = AXUIElementCreateApplication(running.processIdentifier)
 
         // Wait for the app to be frontmost with its first window (cold launches can take a few seconds).
-        _ = await waitFor(timeout: 6) { running.isFinishedLaunching && running.isActive && !windows(of: ax).isEmpty }
+        _ = await waitFor(timeout: 6) { running.isFinishedLaunching && running.isActive && (!windows(of: ax).isEmpty || mainWindow(of: ax) != nil) }
+        // A full-screen window lives on its own Space, invisible to the window list: bring it back to the desktop.
+        await exitFullScreen(ax)
 
         let existing = windows(of: ax).count
         let newNeeded = wasRunning ? (count > 1 ? count : 0) : max(0, count - existing)
@@ -160,6 +162,29 @@ enum WindowManager {
             AXUIElementCopyAttributeValue(w, kAXSubroleAttribute as CFString, &role)
             return (role as? String) == kAXStandardWindowSubrole as String
         }
+    }
+
+    private static func mainWindow(of app: AXUIElement) -> AXUIElement? {
+        for attr in [kAXMainWindowAttribute, kAXFocusedWindowAttribute] {
+            var v: CFTypeRef?
+            if AXUIElementCopyAttributeValue(app, attr as CFString, &v) == .success, let v { return (v as! AXUIElement) }
+        }
+        return nil
+    }
+
+    /// Takes the app's window out of full screen and waits for it to land on the desktop.
+    private static func exitFullScreen(_ app: AXUIElement) async {
+        let candidates = windows(of: app) + [mainWindow(of: app)].compactMap { $0 }
+        var exited = false
+        for w in candidates {
+            var v: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(w, "AXFullScreen" as CFString, &v) == .success, (v as? Bool) == true else { continue }
+            AXUIElementSetAttributeValue(w, "AXFullScreen" as CFString, kCFBooleanFalse)
+            exited = true
+        }
+        guard exited else { return }
+        _ = await waitFor(timeout: 3) { !windows(of: app).isEmpty }
+        try? await Task.sleep(for: .milliseconds(700))   // let the Space animation finish before moving it
     }
 
     private static func waitFor(timeout: Double, _ condition: () -> Bool) async -> Bool {

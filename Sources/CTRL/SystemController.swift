@@ -12,6 +12,7 @@ enum SystemController {
         case displayOff = "display_off"
         case screenshotFull = "screenshot_full", screenshotArea = "screenshot_area", screenshotWindow = "screenshot_window"
         case emptyTrash = "empty_trash"
+        case battery = "battery_status"
 
         var isLevel: Bool { self == .volumeSet || self == .brightnessSet }
     }
@@ -37,6 +38,7 @@ enum SystemController {
         "screenshot_area": "take a screenshot of a selected area, region, or part of the screen (user wants to select/drag)",
         "screenshot_window": "take a screenshot of a window",
         "empty_trash": "empty the Trash / bin",
+        "battery_status": "ASK how much battery is left right now (not showing it in the menu bar), the battery percentage, whether it's charging, or how long the battery will last",
     ])
 
     static let levelQuestion = TypeSafeClient.Question.choice("What level (percent) does the user ask for? Speech-to-text may write numbers as words.", options: [
@@ -99,6 +101,9 @@ enum SystemController {
             }
             let what = action == .screenshotFull ? "Screenshot" : action == .screenshotArea ? "Select an area" : "Click a window"
             return Result(symbol: "camera.viewfinder", title: what, detail: nil)
+        case .battery:
+            guard let b = Battery.now else { return Result(symbol: "powerplug.fill", title: "No battery", detail: "This Mac runs on power") }
+            return Result(symbol: Battery.symbol(b), title: "Battery \(b.percent)%", detail: Battery.detail(b))
         case .emptyTrash:
             let n = Int(osa("tell application \"Finder\" to count items of trash") ?? "") ?? 0
             guard n > 0 else { return Result(symbol: "trash", title: "Trash is already empty", detail: nil) }

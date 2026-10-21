@@ -43,6 +43,14 @@ enum Vocabulary {
         return words.filter { spoken.contains(compact($0)) }
     }
 
+    /// Rewrites the file, keeping its comment lines.
+    static func save(_ list: [String]) {
+        let text = (try? String(contentsOf: fileURL, encoding: .utf8)) ?? starter
+        let comments = text.split(whereSeparator: \.isNewline).filter { $0.hasPrefix("#") }.map(String.init)
+        let clean = list.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        try? (comments + clean).joined(separator: "\n").appending("\n").write(to: fileURL, atomically: true, encoding: .utf8)
+    }
+
     static func open() {
         _ = words   // ensure file exists
         NSWorkspace.shared.open(fileURL)

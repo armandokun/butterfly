@@ -19,9 +19,19 @@ struct NotchView: View {
         }
     }
     /// Idle + music playing: artwork left of the notch, equalizer right (DynamicNotch's "live activity").
-    private var playingIdle: Bool { model.phase == .idle && music.track?.playing == true }
+    private var playingIdle: Bool { false }   // no persistent mini player: lean notch
     private var timerIdle: Bool { model.phase == .idle && timers.next != nil }
     private var isPlayer: Bool { model.phase == .nowPlaying && music.track != nil }
+    private var answer: (title: String, text: String)? {
+        if case .answer(let t, let x) = model.phase { return (t, x) }
+        return nil
+    }
+    /// Answer card height: grows with the text, up to ~6 lines.
+    private var answerHeight: CGFloat {
+        guard let a = answer else { return 0 }
+        let lines = a.text.split(separator: "\n").reduce(0) { $0 + max(1, Int(ceil(Double($1.count) / 68))) }
+        return 44 + CGFloat(min(6, lines)) * 21
+    }
 
     private var compactExtra: CGFloat {
         if case .level = model.phase { return 150 }
@@ -34,6 +44,8 @@ struct NotchView: View {
         switch (presentation, island) {
         case (.closed, false): closed
         case (.compact, false): .init(width: closed.width + compactExtra, height: closed.height)
+        case (.expanded, false) where answer != nil: .init(width: max(closed.width + 300, 520), height: closed.height + answerHeight + 14)
+        case (.expanded, true) where answer != nil: .init(width: 500, height: answerHeight + 30)
         case (.expanded, false): isPlayer ? .init(width: closed.width + 200, height: closed.height + 96)
                                           : .init(width: max(closed.width + 220, 420), height: closed.height + 64)
         case (.closed, true): .init(width: 120, height: 32)
@@ -68,9 +80,11 @@ struct NotchView: View {
                         compact.transition(.notch(expanded: false, lift: 0))
                     case .expanded:
                         Group {
-                            if isPlayer, let t = music.track { PlayerCard(track: t) } else { content }
+                            if isPlayer, let t = music.track { PlayerCard(track: t) }
+                            else if let a = answer { AnswerCard(title: a.title, text: a.text) }
+                            else { content }
                         }
-                        .padding(.top, island ? (isPlayer ? 16 : 0) : closed.height + (isPlayer ? 8 : 0))
+                        .padding(.top, island ? (isPlayer || answer != nil ? 14 : 0) : closed.height + (isPlayer ? 8 : answer != nil ? 4 : 0))
                         .padding(.horizontal, island ? 22 : 30)
                         .padding(.bottom, isPlayer ? 16 : 0)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -158,6 +172,7 @@ struct NotchView: View {
                 Text(title)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white)
+                    .modifier(Shimmer(active: isWorking))
                 if let subtitle {
                     Text(subtitle)
                         .font(.system(size: 11))
@@ -202,6 +217,8 @@ struct NotchView: View {
             Image(nsImage: app.icon).resizable().interpolation(.high).frame(width: 28, height: 28)
         case .media(nil, _, _):
             Image(systemName: "music.note").font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
+        case .system(let symbol, let title, _) where title.hasSuffix("…"):
+            WorkingIcon(symbol: symbol)
         case .system(let symbol, _, _):
             Image(systemName: symbol).font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
                 .contentTransition(.symbolEffect(.replace))
@@ -216,7 +233,7 @@ struct NotchView: View {
             Image(systemName: "timer").font(.system(size: 20, weight: .semibold)).foregroundStyle(.orange)
         case .badge(let s, _, let tint):
             Image(systemName: s).font(.system(size: 18, weight: .semibold)).foregroundStyle(tint)
-        case .idle:
+        case .idle, .answer:
             EmptyView()
         }
     }
@@ -224,7 +241,15 @@ struct NotchView: View {
     @ViewBuilder private var trailing: some View {
         if model.phase == .listening {
             Waveform(levels: model.levels)
+        } else if case .system(_, let title, _) = model.phase, title.hasSuffix("…") {
+            Elapsed()
         }
+    }
+
+    /// Long waits ("Working on it…", "Reading the screen…"): shimmering title so it never looks frozen.
+    private var isWorking: Bool {
+        if case .system(_, let title, _) = model.phase { return title.hasSuffix("…") }
+        return model.phase == .thinking
     }
 
     private var title: String {
@@ -241,6 +266,7 @@ struct NotchView: View {
         case .nowPlaying: music.track?.title ?? ""
         case .timerDone: "Time’s up"
         case .badge(_, let text, _): text
+        case .answer(let t, _): t
         case .idle: ""
         }
     }
@@ -318,5 +344,119 @@ private struct Waveform: View {
         }
         .frame(height: maxHeight + 4)
         .animation(.easeOut(duration: 0.08), value: levels)
+    }
+}
+
+/// DynamicNotch-style expanded card: a header row, then either event rows (agenda) or a short paragraph (answers).
+/// Agenda lines are "time  title" (two spaces).
+private struct AnswerCard: View {
+    let title: String
+    let text: String
+
+    private var rows: [(time: String, title: String)]? {
+        let lines = text.split(separator: "\n").map(String.init)
+        let parsed = lines.compactMap { l -> (String, String)? in
+            guard let r = l.range(of: "  ") else { return l.hasPrefix("+") ? ("", l) : nil }
+            return (String(l[..<r.lowerBound]), String(l[r.upperBound...]))
+        }
+        return parsed.count == lines.count ? parsed : nil
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: rows == nil ? "sparkles" : "calendar")
+                    .foregroundStyle(rows == nil ? AnyShapeStyle(LinearGradient(colors: [.purple, .orange], startPoint: .topLeading, endPoint: .bottomTrailing)) : AnyShapeStyle(.red))
+                Text(title).foregroundStyle(.white.opacity(0.6))
+                Spacer()
+            }
+            .font(.system(size: 11, weight: .semibold))
+
+            if let rows {
+                VStack(alignment: .leading, spacing: 5) {
+                    ForEach(rows.indices, id: \.self) { i in
+                        let r = rows[i]
+                        HStack(spacing: 10) {
+                            Capsule().fill(r.time.isEmpty ? .clear : r.time == "All day" ? Color.orange : Color.red)
+                                .frame(width: 3, height: 16)
+                            Text(r.time)
+                                .font(.system(size: 12, weight: .medium).monospacedDigit())
+                                .foregroundStyle(.white.opacity(0.55))
+                                .frame(width: 52, alignment: .leading)
+                            Text(r.title)
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(r.time.isEmpty ? .white.opacity(0.5) : .white)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+            } else {
+                Text(text)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .lineLimit(6)
+                    .lineSpacing(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+/// Busy icon: the symbol breathes inside a spinning gradient ring (Apple Intelligence colors).
+private struct WorkingIcon: View {
+    let symbol: String
+    @State private var spin = false
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(AngularGradient(colors: [.purple, .pink, .orange, .yellow, .cyan, .purple], center: .center), style: .init(lineWidth: 2, lineCap: .round))
+                .frame(width: 26, height: 26)
+                .mask(Circle().trim(from: 0, to: 0.72).stroke(lineWidth: 3).frame(width: 26, height: 26))
+                .rotationEffect(.degrees(spin ? 360 : 0))
+            Image(systemName: symbol)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white)
+                .symbolEffect(.pulse, options: .repeating)
+        }
+        .frame(width: 28, height: 28)
+        .onAppear { withAnimation(.linear(duration: 1.1).repeatForever(autoreverses: false)) { spin = true } }
+    }
+}
+
+/// Seconds since it started: proof it's still going.
+private struct Elapsed: View {
+    @State private var start = Date()
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { ctx in
+            Text("\(Int(ctx.date.timeIntervalSince(start)))s")
+                .font(.system(size: 11, weight: .medium).monospacedDigit())
+                .foregroundStyle(.white.opacity(0.4))
+                .contentTransition(.numericText())
+        }
+    }
+}
+
+/// A light band sweeping across the text.
+private struct Shimmer: ViewModifier {
+    let active: Bool
+    @State private var x: CGFloat = -1
+    func body(content: Content) -> some View {
+        if !active { content } else {
+            content
+                .overlay {
+                    GeometryReader { g in
+                        LinearGradient(colors: [.clear, .white.opacity(0.9), .clear], startPoint: .leading, endPoint: .trailing)
+                            .frame(width: g.size.width * 0.5)
+                            .offset(x: x * g.size.width * 1.5)
+                    }
+                    .mask(content)
+                    .blendMode(.plusLighter)
+                }
+                .opacity(0.85)
+                .onAppear { withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) { x = 1 } }
+        }
     }
 }

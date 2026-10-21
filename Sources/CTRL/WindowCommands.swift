@@ -169,6 +169,37 @@ enum WindowCommands {
         return Memory.display(at: CGPoint(x: pos.x + size.width / 2, y: pos.y + size.height / 2))
     }
 
+    /// For undo: the app's window and its AX frame (top-left origin) right now.
+    static func snapshot(of app: NSRunningApplication) -> (window: AXUIElement, frame: CGRect, minimized: Bool, fullScreen: Bool)? {
+        let ax = AXUIElementCreateApplication(app.processIdentifier)
+        guard let w: AXUIElement = attr(ax, kAXFocusedWindowAttribute) ?? attr(ax, kAXMainWindowAttribute),
+              let p: AXValue = attr(w, kAXPositionAttribute), let s: AXValue = attr(w, kAXSizeAttribute) else { return nil }
+        var pos = CGPoint.zero, size = CGSize.zero
+        AXValueGetValue(p, .cgPoint, &pos)
+        AXValueGetValue(s, .cgSize, &size)
+        return (w, CGRect(origin: pos, size: size), attr(w, kAXMinimizedAttribute) ?? false, attr(w, "AXFullScreen") ?? false)
+    }
+
+    static func restore(_ snap: (window: AXUIElement, frame: CGRect, minimized: Bool, fullScreen: Bool), app: NSRunningApplication) async {
+        let w = snap.window
+        if (attr(w, kAXMinimizedAttribute) as Bool?) == true, !snap.minimized {
+            AXUIElementSetAttributeValue(w, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+            try? await Task.sleep(for: .milliseconds(400))
+        }
+        let fs: Bool = attr(w, "AXFullScreen") ?? false
+        if fs != snap.fullScreen {
+            AXUIElementSetAttributeValue(w, "AXFullScreen" as CFString, snap.fullScreen as CFBoolean)
+            try? await Task.sleep(for: .milliseconds(800))
+            if snap.fullScreen { return }
+        }
+        app.activate()
+        var pos = snap.frame.origin, size = snap.frame.size
+        // Size, move, size again: the window may be clamped by the screen it's on before the move.
+        if let s = AXValueCreate(.cgSize, &size) { AXUIElementSetAttributeValue(w, kAXSizeAttribute as CFString, s) }
+        if let p = AXValueCreate(.cgPoint, &pos) { AXUIElementSetAttributeValue(w, kAXPositionAttribute as CFString, p) }
+        if let s = AXValueCreate(.cgSize, &size) { AXUIElementSetAttributeValue(w, kAXSizeAttribute as CFString, s) }
+    }
+
     private static func frame(of window: AXUIElement) -> CGRect? {
         guard let p: AXValue = attr(window, kAXPositionAttribute), let s: AXValue = attr(window, kAXSizeAttribute) else { return nil }
         var pos = CGPoint.zero, size = CGSize.zero

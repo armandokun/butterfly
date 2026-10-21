@@ -2,35 +2,21 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key>
-    <string>CTRL</string>
-    <key>CFBundleDisplayName</key>
-    <string>CTRL</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.armandas.ctrl</string>
-    <key>CFBundleExecutable</key>
-    <string>CTRL</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
-    <key>CFBundleVersion</key>
-    <string>1</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>26.0</string>
-    <key>LSUIElement</key>
-    <true/>
-    <key>NSMicrophoneUsageDescription</key>
-    <string>CTRL listens while you hold Option so it can understand your command.</string>
-    <key>NSSpeechRecognitionUsageDescription</key>
-    <string>CTRL transcribes your voice on-device to understand your command.</string>
-    <key>NSAppleEventsUsageDescription</key>
-    <string>CTRL opens websites in new browser windows so it can place them side by side.</string>
-    <key>NSBluetoothAlwaysUsageDescription</key>
-    <string>CTRL connects your Bluetooth devices by voice and shows their battery in the notch.</string>
-    <key>NSLocationUsageDescription</key>
-    <string>macOS only shares the Wi-Fi network name with apps that have Location access. CTRL uses it to show which network you joined.</string>
-    <key>NSLocationWhenInUseUsageDescription</key>
-    <string>macOS only shares the Wi-Fi network name with apps that have Location access. CTRL uses it to show which network you joined.</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
 </dict>
 </plist>

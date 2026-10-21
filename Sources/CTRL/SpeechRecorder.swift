@@ -10,7 +10,10 @@ final class SpeechRecorder {
     var onSegment: ((String) -> Void)?
     var onVolatile: ((String) -> Void)?
 
-    private let engine = AVAudioEngine()
+    private var engine = AVAudioEngine()
+    private var engineDevice: AudioObjectID?
+    /// Name of the mic used for the current/last recording (shown if nothing was heard).
+    private(set) var micName: String?
     private var analyzer: SpeechAnalyzer?
     private var transcriber: SpeechTranscriber?
     private var resultsTask: Task<String, Error>?
@@ -41,8 +44,23 @@ final class SpeechRecorder {
         self.transcriber = transcriber
         self.analyzer = analyzer
 
+        // Pick the mic each time (displays/AirPods come and go). A fresh engine per device switch:
+        // AVAudioEngine caches the old device's format otherwise.
+        let mic = AudioInput.chosen
+        micName = mic?.name
+        if let mic, mic.id != engineDevice {
+            engine = AVAudioEngine()
+            if let unit = engine.inputNode.audioUnit {
+                var id = mic.id
+                AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &id, UInt32(MemoryLayout<AudioObjectID>.size))
+            }
+            engine.reset()   // drop the old device's cached format
+            engineDevice = mic.id
+        }
         let input = engine.inputNode
-        let micFormat = input.outputFormat(forBus: 0)
+        // The device's real format (48 kHz on Studio Display); outputFormat can be stale after a switch → no audio.
+        let hw = input.inputFormat(forBus: 0)
+        let micFormat = hw.sampleRate > 0 ? hw : input.outputFormat(forBus: 0)
         let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber], considering: micFormat) ?? micFormat
         analyzerFormat = format
         converter = micFormat == format ? nil : AVAudioConverter(from: micFormat, to: format)

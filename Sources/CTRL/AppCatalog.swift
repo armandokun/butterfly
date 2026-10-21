@@ -51,6 +51,19 @@ final class AppCatalog {
             .map(\.0)
     }
 
+    /// Your default web browser (Dia, Chrome, Safari…), so "the browser" means yours.
+    var defaultBrowser: InstalledApp? {
+        guard let url = NSWorkspace.shared.urlForApplication(toOpen: URL(string: "https://example.com")!) else { return nil }
+        let name = url.deletingPathExtension().lastPathComponent
+        return app(named: name) ?? InstalledApp(name: name, url: url)
+    }
+
+    /// "put the browser and discord…" → "put Dia and discord…".
+    func resolvingGenericNames(_ transcript: String) -> String {
+        guard let b = defaultBrowser else { return transcript }
+        return transcript.replacingOccurrences(of: #"\b(my |the )?(web )?browser\b"#, with: b.name, options: [.regularExpression, .caseInsensitive])
+    }
+
     /// Offline fallback: exact name match in the transcript.
     func localMatch(_ transcript: String) -> InstalledApp? {
         let t = transcript.lowercased()

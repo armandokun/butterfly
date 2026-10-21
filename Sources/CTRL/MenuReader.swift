@@ -67,9 +67,15 @@ enum MenuReader {
         return scored.sorted { $0.1 > $1.1 }.prefix(limit).map(\.0)
     }
 
-    static func press(_ item: Item, in app: NSRunningApplication) {
+    /// Brings the app to front (menu actions act on its key window), waits until it really is, then presses.
+    /// False when the press didn't go through.
+    @discardableResult
+    static func press(_ item: Item, in app: NSRunningApplication) async -> Bool {
         app.activate()
-        AXUIElementPerformAction(item.element, kAXPressAction as CFString)
+        for _ in 0..<25 where NSWorkspace.shared.frontmostApplication != app { try? await Task.sleep(for: .milliseconds(20)) }
+        try? await Task.sleep(for: .milliseconds(120))   // key window settles
+        let r = AXUIElementPerformAction(item.element, kAXPressAction as CFString)
+        return r == .success
     }
 
     // MARK: AX helpers

@@ -58,7 +58,7 @@ final class NowPlaying: ObservableObject {
             let k = Process(); k.executableURL = URL(fileURLWithPath: "/usr/bin/pkill"); k.arguments = ["-f", "mediaremote-adapter.pl"]
             try? k.run(); k.waitUntilExit()
             NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.process?.terminationHandler = nil; self?.process?.terminate() }
+                Task { @MainActor in self?.process?.terminationHandler = nil; self?.process?.terminate() }
             }
         }
         let p = Process()
@@ -70,10 +70,13 @@ final class NowPlaying: ObservableObject {
         out.fileHandleForReading.readabilityHandler = { [weak self] h in
             let d = h.availableData
             guard !d.isEmpty else { return }
-            DispatchQueue.main.async { MainActor.assumeIsolated { self?.consume(d) } }
+            Task { @MainActor [weak self] in self?.consume(d) }
         }
         p.terminationHandler = { [weak self] _ in
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { MainActor.assumeIsolated { self?.process = nil; self?.start() } }
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(3))
+                self?.process = nil; self?.start()
+            }
         }
         try? p.run()
         process = p
