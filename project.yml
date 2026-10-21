@@ -25,6 +25,18 @@ targets:
         buildPhase: resources
     info:
       path: Resources/Info.plist
+      properties:
+        CFBundleName: CTRL
+        CFBundleDisplayName: CTRL
+        LSUIElement: true
+        NSMicrophoneUsageDescription: CTRL listens while you hold Option so it can understand your command.
+        NSSpeechRecognitionUsageDescription: CTRL transcribes your voice on-device to understand your command.
+        NSAppleEventsUsageDescription: CTRL opens websites in new browser windows so it can place them side by side.
+        NSBluetoothAlwaysUsageDescription: CTRL connects your Bluetooth devices by voice and shows their battery in the notch.
+        NSLocationUsageDescription: macOS only shares the Wi-Fi network name with apps that have Location access. CTRL uses it to show which network you joined.
+        NSLocationWhenInUseUsageDescription: macOS only shares the Wi-Fi network name with apps that have Location access. CTRL uses it to show which network you joined.
+        NSCalendarsFullAccessUsageDescription: CTRL adds events and reads your agenda when you ask by voice.
+        NSRemindersFullAccessUsageDescription: CTRL creates reminders when you ask by voice.
     entitlements:
       path: Resources/CTRL.entitlements
       properties:

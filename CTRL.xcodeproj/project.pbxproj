@@ -37,6 +37,7 @@
 		91C03F131186C56C3D50CEFD /* Keychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B0DBB7E76D987D8EF0AC96A /* Keychain.swift */; };
 		93B4017EAA1E211CD759D8C9 /* Clicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11FAA3D0E80C0E88C90348D2 /* Clicker.swift */; };
 		969A65EDBAB6277EA3821904 /* NotchPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FB1637AB06E54ED815251AB /* NotchPanel.swift */; };
+		9B15780D26009DC9451C36BB /* Installer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 104EDED5A3688367F33CFFFB /* Installer.swift */; };
 		A0711830BE6789B37A294EB8 /* SystemController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DC8A9CB2FB33A26D859C33C /* SystemController.swift */; };
 		A2247825B671B8640C02A901 /* NotchShape.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53267B52E523C8BB18B43800 /* NotchShape.swift */; };
 		B38CB83D843B8777669953BA /* MenuReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = B21C03D7CF9F7330C5EE3BF5 /* MenuReader.swift */; };
@@ -59,6 +60,7 @@
 		00C548B92D1CC12C3FA64045 /* AudioOutput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioOutput.swift; sourceTree = "<group>"; };
 		0492D48F921D36AA4654AD19 /* Agent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent.swift; sourceTree = "<group>"; };
 		0FB1637AB06E54ED815251AB /* NotchPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchPanel.swift; sourceTree = "<group>"; };
+		104EDED5A3688367F33CFFFB /* Installer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Installer.swift; sourceTree = "<group>"; };
 		11FAA3D0E80C0E88C90348D2 /* Clicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Clicker.swift; sourceTree = "<group>"; };
 		12BD9EDC3A7D9B5623140241 /* Typer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Typer.swift; sourceTree = "<group>"; };
 		14C165DB9F3A3B90D8526067 /* Clipboard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Clipboard.swift; sourceTree = "<group>"; };
@@ -167,6 +169,7 @@
 				1F2FD901C2DFE28FC497AD49 /* Files.swift */,
 				C012656CE92E6093DD78C3BB /* HotkeyMonitor.swift */,
 				5F381DADD26773BCEA30D656 /* HUD.swift */,
+				104EDED5A3688367F33CFFFB /* Installer.swift */,
 				4B0DBB7E76D987D8EF0AC96A /* Keychain.swift */,
 				DC188D373AF42569DC5FE8F4 /* KeyCommands.swift */,
 				1DAD19FFD5E47A87214F48FE /* MediaController.swift */,
@@ -287,6 +290,7 @@
 				F7C62CC1B21360E6C7DD5ACB /* Files.swift in Sources */,
 				3A2EA121F31936876DEF69E2 /* HUD.swift in Sources */,
 				891ED7043D7B25BE5AD9C210 /* HotkeyMonitor.swift in Sources */,
+				9B15780D26009DC9451C36BB /* Installer.swift in Sources */,
 				E4CD7FCE154EC05A27C0A05A /* KeyCommands.swift in Sources */,
 				91C03F131186C56C3D50CEFD /* Keychain.swift in Sources */,
 				16E550DCB8CE7902201276A1 /* MediaController.swift in Sources */,

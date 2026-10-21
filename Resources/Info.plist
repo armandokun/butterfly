@@ -20,5 +20,23 @@
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>CTRL opens websites in new browser windows so it can place them side by side.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>CTRL connects your Bluetooth devices by voice and shows their battery in the notch.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>CTRL adds events and reads your agenda when you ask by voice.</string>
+	<key>NSLocationUsageDescription</key>
+	<string>macOS only shares the Wi-Fi network name with apps that have Location access. CTRL uses it to show which network you joined.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>macOS only shares the Wi-Fi network name with apps that have Location access. CTRL uses it to show which network you joined.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>CTRL listens while you hold Option so it can understand your command.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>CTRL creates reminders when you ask by voice.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>CTRL transcribes your voice on-device to understand your command.</string>
 </dict>
 </plist>
