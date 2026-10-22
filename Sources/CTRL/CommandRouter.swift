@@ -35,6 +35,7 @@ struct CommandRouter {
         case agent(String)                       // second layer: the on-device LLM plans and does it
         case webSearch(URL, query: String, engine: String)
         case press(KeyPress.Combo)
+        case cursor(CursorControl.Action, chat: CursorControl.Chat?, project: String?, message: String)
         case unsure(best: InstalledApp?)
         case needAddress
         case notACommand
@@ -52,7 +53,7 @@ struct CommandRouter {
     /// `previous`: the last command you gave (for "this one too"). `dictating`: a type command is in progress.
     @MainActor
     func route(_ transcript: String, menu: MenuReader.Snapshot? = nil, front: NSRunningApplication? = nil, elements: [Clicker.Element] = [],
-               previous: String? = nil, dictating: Bool = false) async throws -> Outcome {
+               previous: String? = nil, dictating: Bool = false, cursor: CursorControl.Snapshot? = nil) async throws -> Outcome {
         let catalog = AppCatalog.shared
         let transcript = catalog.resolvingGenericNames(transcript)
         // Spotlight runs while Jev decides; only used if the answer is "find a file".
@@ -199,6 +200,19 @@ struct CommandRouter {
             }
         }
 
+        // Cursor branch: its conversations and projects are the options (read while you talked).
+        if let cursor {
+            questions["cursor_action"] = CursorControl.actionQuestion
+            questions["cursor_chat"] = .choice("Which Cursor conversation does the user mean? Speech-to-text may mangle titles; match by topic.", options: CursorControl.chatOptions(cursor))
+            var po = ["none": "no project named"]
+            for p in Set(cursor.chats.compactMap(\.project)).union(cursor.newAgent.keys) { po["p:" + p] = "the \(p) project" }
+            questions["cursor_project"] = .choice("Which Cursor project does the user name, if any?", options: po)
+            if case .choice(let text, var intents) = questions["intent"]! {
+                intents["cursor"] = "control Cursor, the coding app in front: go to the last conversation, open a specific chat, start a new agent, ask / tell the agent to do something, or test / run the project locally"
+                questions["intent"] = .choice(text, options: intents)
+            }
+        }
+
         // Focus / connect branches: your own modes, devices, and networks are the options.
         let focusModes = Focus.modes
         var fm = ["off": "turn Focus / Do Not Disturb off, stop focusing, allow notifications again"]
@@ -293,6 +307,19 @@ struct CommandRouter {
             if let a = response.choice("clip_item"), let item = Clipboard.shared.item(a.choice) { return .pasteHistory(item) }
         }
         if intent == "task" { return .agent(transcript) }
+        // Said most of a conversation's title ("open the MacBook Pro voice command app chat"): open it, whatever the intent guess.
+        if let cursor, let chat = CursorControl.chatNamed(in: transcript, snapshot: cursor), intent != "cursor" || response.choice("cursor_action")?.choice == "open_chat" {
+            return .cursor(.openChat, chat: chat, project: chat.project, message: "")
+        }
+        if intent == "cursor", let cursor, let a = response.choice("cursor_action"), let action = CursorControl.Action(rawValue: a.choice) {
+            let chat = response.choice("cursor_chat").flatMap { c -> CursorControl.Chat? in
+                guard c.choice.hasPrefix("c"), let i = Int(c.choice.dropFirst()), cursor.chats.indices.contains(i) else { return nil }
+                return cursor.chats[i]
+            }
+            let project = response.choice("cursor_project").flatMap { $0.choice.hasPrefix("p:") ? String($0.choice.dropFirst(2)) : nil }
+                ?? CursorControl.projectNamed(in: transcript, snapshot: cursor)
+            return .cursor(action, chat: chat, project: project, message: CursorControl.message(from: transcript))
+        }
         if intent == "search" || (intent == "open" && Self.looksLikeSearch(transcript)), let s = WebSearch.parse(transcript) {
             return .webSearch(s.url, query: s.query, engine: s.engine)
         }

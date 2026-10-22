@@ -45,6 +45,15 @@ struct CTRLMain {
             }
             RunLoop.main.run()
         }
+        if let i = args.firstIndex(of: "--project-run"), i + 1 < args.count {
+            // Debug: how "test it locally" would run a Cursor project.
+            for name in args[(i + 1)...] {
+                let dir = ProjectRunner.folder(named: name)
+                let run = dir.flatMap(ProjectRunner.detect)
+                print(name, "→", dir?.path ?? "no folder", "→", run.map { "\($0.command) web=\($0.web) port=\($0.port.map(String.init) ?? "detect")" } ?? "unknown")
+            }
+            return
+        }
         if let i = args.firstIndex(of: "--route"), i + 1 < args.count {
             return routeFromCLI(args[(i + 1)...].joined(separator: " "))
         }
@@ -95,10 +104,19 @@ struct CTRLMain {
             do {
                 let router = CommandRouter(client: TypeSafeClient(apiKey: key))
                 let env = ProcessInfo.processInfo.environment
+                let cursorSnap = front.flatMap(CursorControl.snapshot)
+                if let cursorSnap { print("cursor: \(cursorSnap.chats.count) chats, project \(cursorSnap.currentProject ?? "-"), open: \(cursorSnap.chats.first { $0.current }?.title ?? "-")") }
                 let outcome = try await router.route(text, menu: menu, front: front, elements: elements,
-                                                     previous: env["CTRL_PREV"], dictating: env["CTRL_DICTATING"] == "1")
+                                                     previous: env["CTRL_PREV"], dictating: env["CTRL_DICTATING"] == "1", cursor: cursorSnap)
                 let ms = String(format: "(%.0f ms)", Date().timeIntervalSince(start) * 1000)
-                if case .type(let text, let ret) = outcome {
+                if case .cursor(let action, let chat, let project, let message) = outcome {
+                    print("outcome: cursor \(action.rawValue) chat=\(chat?.title ?? "-") project=\(project ?? "-") message=“\(message)” \(ms)")
+                    if exec, let cursorSnap {
+                        let r = await CursorControl.perform(action, chat: chat, project: project, message: message, snapshot: cursorSnap, menu: menu)
+                        print("executed: \(r.title) \(r.detail ?? "")")
+                        try? await Task.sleep(for: .seconds(1))
+                    }
+                } else if case .type(let text, let ret) = outcome {
                     print("outcome: type “\(text)” return=\(ret) \(ms)")
                     if exec { front?.activate(); try? await Task.sleep(for: .milliseconds(300)); await Typer.type(text, pressReturn: ret); print("executed") }
                 } else if case .file(let url, let reveal) = outcome {

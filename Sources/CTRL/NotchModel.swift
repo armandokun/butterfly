@@ -248,12 +248,15 @@ final class NotchModel: ObservableObject {
         menuSnapshot = nil
         frontApp = nil
         clickables = []
+        cursorSnapshot = nil
         if let front = NSWorkspace.shared.frontmostApplication, front.bundleIdentifier != Bundle.main.bundleIdentifier {
             frontApp = front
             menuSnapshot = MenuReader.snapshot(of: front)
             clickables = Clicker.elements(of: front)
+            cursorSnapshot = CursorControl.snapshot(of: front)
         }
     }
+    private var cursorSnapshot: CursorControl.Snapshot?
 
     // MARK: Locked mode (⌥⇧): keep listening, run each sentence when you pause
 
@@ -415,7 +418,7 @@ final class NotchModel: ObservableObject {
             let router = CommandRouter(client: TypeSafeClient(apiKey: key))
             let previous = Date().timeIntervalSince(lastCommandAt) < 120 ? lastCommand : nil
             var outcome = try await router.route(text, menu: menuSnapshot, front: frontApp, elements: clickables,
-                                                 previous: previous, dictating: dictating)
+                                                 previous: previous, dictating: dictating, cursor: cursorSnapshot)
             if case .repeatLast = outcome, let previous {
                 // Same words, fresh context: "close this tab" → "this one too" closes the new current tab.
                 outcome = try await router.route(previous, menu: menuSnapshot, front: frontApp, elements: clickables)
@@ -492,6 +495,10 @@ final class NotchModel: ObservableObject {
             case .press(let combo):
                 await KeyPress.perform(combo, in: frontApp)
                 show(.system(symbol: "keyboard", title: combo.label + (combo.times > 1 ? " ×\(combo.times)" : ""), detail: nil), for: 0.9)
+            case .cursor(let action, let chat, let project, let message):
+                guard let snap = cursorSnapshot else { break }
+                let r = await CursorControl.perform(action, chat: chat, project: project, message: message, snapshot: snap, menu: menuSnapshot)
+                show(.system(symbol: r.symbol, title: r.title, detail: r.detail), for: 1.8)
             case .quickSetting(let key, let on):
                 guard let s = QuickSettings.setting(key) else { break }
                 let before = s.get()

@@ -49,6 +49,7 @@
 		B959DD5417373411D6D71664 /* Undo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48AC896A09AE93EBDBD14119 /* Undo.swift */; };
 		BBE6704B2E95E7B2E97394C6 /* Typer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12BD9EDC3A7D9B5623140241 /* Typer.swift */; };
 		BE00233286C98855552D8087 /* SettingsController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43197F7E43AAB26ECDD9B9C4 /* SettingsController.swift */; };
+		C30F03AE0B3F31CC16107C61 /* CursorControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 682392B1484D9F1B0CD7DF64 /* CursorControl.swift */; };
 		CD32E28FADFCE5BDE2CA43E6 /* Connectivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8599EE9EA9C0B806D6C0175 /* Connectivity.swift */; };
 		E4CD7FCE154EC05A27C0A05A /* KeyCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC188D373AF42569DC5FE8F4 /* KeyCommands.swift */; };
 		EE59FF336B39AC21CFCDE0B2 /* Ambient.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC7FC0210EFCB425476C122F /* Ambient.swift */; };
@@ -86,6 +87,7 @@
 		53267B52E523C8BB18B43800 /* NotchShape.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchShape.swift; sourceTree = "<group>"; };
 		5F381DADD26773BCEA30D656 /* HUD.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HUD.swift; sourceTree = "<group>"; };
 		6733056D294C8A445515A05A /* Memory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Memory.swift; sourceTree = "<group>"; };
+		682392B1484D9F1B0CD7DF64 /* CursorControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorControl.swift; sourceTree = "<group>"; };
 		74E3007D72F748CC8D287724 /* App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
 		805A2D33C4F848A8520788DA /* menubar@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "menubar@2x.png"; sourceTree = "<group>"; };
 		81E61D52949F8A4FEB385FF0 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = wrapper.icon; path = AppIcon.icon; sourceTree = "<group>"; };
@@ -174,6 +176,7 @@
 				14C165DB9F3A3B90D8526067 /* Clipboard.swift */,
 				45F8E76D810FEE9795EA0970 /* CommandRouter.swift */,
 				E8599EE9EA9C0B806D6C0175 /* Connectivity.swift */,
+				682392B1484D9F1B0CD7DF64 /* CursorControl.swift */,
 				1F2FD901C2DFE28FC497AD49 /* Files.swift */,
 				C012656CE92E6093DD78C3BB /* HotkeyMonitor.swift */,
 				5F381DADD26773BCEA30D656 /* HUD.swift */,
@@ -298,6 +301,7 @@
 				F9EECD81F156F8F1EABF49C8 /* Clipboard.swift in Sources */,
 				B783DAB9EAC788A374ABFF13 /* CommandRouter.swift in Sources */,
 				CD32E28FADFCE5BDE2CA43E6 /* Connectivity.swift in Sources */,
+				C30F03AE0B3F31CC16107C61 /* CursorControl.swift in Sources */,
 				F7C62CC1B21360E6C7DD5ACB /* Files.swift in Sources */,
 				3A2EA121F31936876DEF69E2 /* HUD.swift in Sources */,
 				891ED7043D7B25BE5AD9C210 /* HotkeyMonitor.swift in Sources */,
