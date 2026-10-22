@@ -19,6 +19,7 @@
 		394F30FD163FE075A0D49037 /* Timers.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30DD644FF94AE96E2F318B2 /* Timers.swift */; };
 		3A2EA121F31936876DEF69E2 /* HUD.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F381DADD26773BCEA30D656 /* HUD.swift */; };
 		40B04EB8CF3BF8B85BD17461 /* AudioOutput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00C548B92D1CC12C3FA64045 /* AudioOutput.swift */; };
+		42491B0BFD04A80B2C8F354B /* mark.png in Resources */ = {isa = PBXBuildFile; fileRef = 0C0DF38547C6F4E4EF4857D0 /* mark.png */; };
 		4A96678691ED61B677161F3A /* Memory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6733056D294C8A445515A05A /* Memory.swift */; };
 		4B3B8DDD202A78BF95FEEFDB /* menubar.png in Resources */ = {isa = PBXBuildFile; fileRef = A8D49234959CA366760BABDA /* menubar.png */; };
 		525553F465F5CB2CFE9E3491 /* App.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74E3007D72F748CC8D287724 /* App.swift */; };
@@ -47,6 +48,7 @@
 		B959DD5417373411D6D71664 /* Undo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48AC896A09AE93EBDBD14119 /* Undo.swift */; };
 		BBE6704B2E95E7B2E97394C6 /* Typer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12BD9EDC3A7D9B5623140241 /* Typer.swift */; };
 		BE00233286C98855552D8087 /* SettingsController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43197F7E43AAB26ECDD9B9C4 /* SettingsController.swift */; };
+		CD32E28FADFCE5BDE2CA43E6 /* Connectivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8599EE9EA9C0B806D6C0175 /* Connectivity.swift */; };
 		E4CD7FCE154EC05A27C0A05A /* KeyCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC188D373AF42569DC5FE8F4 /* KeyCommands.swift */; };
 		EE59FF336B39AC21CFCDE0B2 /* Ambient.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC7FC0210EFCB425476C122F /* Ambient.swift */; };
 		F0F8E9BC2C8518AD38366047 /* butterfly.png in Resources */ = {isa = PBXBuildFile; fileRef = C4597F22EF36E2ECE0DCB651 /* butterfly.png */; };
@@ -59,6 +61,7 @@
 /* Begin PBXFileReference section */
 		00C548B92D1CC12C3FA64045 /* AudioOutput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioOutput.swift; sourceTree = "<group>"; };
 		0492D48F921D36AA4654AD19 /* Agent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent.swift; sourceTree = "<group>"; };
+		0C0DF38547C6F4E4EF4857D0 /* mark.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = mark.png; sourceTree = "<group>"; };
 		0FB1637AB06E54ED815251AB /* NotchPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchPanel.swift; sourceTree = "<group>"; };
 		104EDED5A3688367F33CFFFB /* Installer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Installer.swift; sourceTree = "<group>"; };
 		11FAA3D0E80C0E88C90348D2 /* Clicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Clicker.swift; sourceTree = "<group>"; };
@@ -104,6 +107,7 @@
 		E14EE5DCEF56B6E88032DF7E /* Agenda.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agenda.swift; sourceTree = "<group>"; };
 		E63AAA703B21EB0CA705FEA0 /* Pond.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Pond.swift; sourceTree = "<group>"; };
 		E643F0F351724AC6503CA5B9 /* QuickSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickSettings.swift; sourceTree = "<group>"; };
+		E8599EE9EA9C0B806D6C0175 /* Connectivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Connectivity.swift; sourceTree = "<group>"; };
 		ED9E4A90AFBDA4F6067F5E34 /* Battery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Battery.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -139,6 +143,7 @@
 			isa = PBXGroup;
 			children = (
 				C4597F22EF36E2ECE0DCB651 /* butterfly.png */,
+				0C0DF38547C6F4E4EF4857D0 /* mark.png */,
 				A8D49234959CA366760BABDA /* menubar.png */,
 				805A2D33C4F848A8520788DA /* menubar@2x.png */,
 			);
@@ -166,6 +171,7 @@
 				11FAA3D0E80C0E88C90348D2 /* Clicker.swift */,
 				14C165DB9F3A3B90D8526067 /* Clipboard.swift */,
 				45F8E76D810FEE9795EA0970 /* CommandRouter.swift */,
+				E8599EE9EA9C0B806D6C0175 /* Connectivity.swift */,
 				1F2FD901C2DFE28FC497AD49 /* Files.swift */,
 				C012656CE92E6093DD78C3BB /* HotkeyMonitor.swift */,
 				5F381DADD26773BCEA30D656 /* HUD.swift */,
@@ -265,6 +271,7 @@
 				019154B0B54B687D456286D1 /* AppIcon.icon in Resources */,
 				889804ADC57E70B27BB2F20B /* MediaRemoteAdapter in Resources */,
 				F0F8E9BC2C8518AD38366047 /* butterfly.png in Resources */,
+				42491B0BFD04A80B2C8F354B /* mark.png in Resources */,
 				4B3B8DDD202A78BF95FEEFDB /* menubar.png in Resources */,
 				FB207277F2C1FF77A3C40A04 /* menubar@2x.png in Resources */,
 			);
@@ -287,6 +294,7 @@
 				93B4017EAA1E211CD759D8C9 /* Clicker.swift in Sources */,
 				F9EECD81F156F8F1EABF49C8 /* Clipboard.swift in Sources */,
 				B783DAB9EAC788A374ABFF13 /* CommandRouter.swift in Sources */,
+				CD32E28FADFCE5BDE2CA43E6 /* Connectivity.swift in Sources */,
 				F7C62CC1B21360E6C7DD5ACB /* Files.swift in Sources */,
 				3A2EA121F31936876DEF69E2 /* HUD.swift in Sources */,
 				891ED7043D7B25BE5AD9C210 /* HotkeyMonitor.swift in Sources */,

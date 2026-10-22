@@ -33,6 +33,31 @@ final class NotchPanel: NSPanel {
         let f = screen.frame
         setFrameOrigin(.init(x: f.midX - Self.size.width / 2, y: f.maxY - Self.size.height))
     }
+
+    /// Trackpad / mouse-wheel swipe over the notch (the panel stays click-through, so this listens globally).
+    /// Fires once per gesture when it moves up or sideways past a small threshold, within the top strip.
+    private var swipeMonitor: Any?
+    private var travel = CGSize.zero
+    private var fired = false
+    private var lastScroll = Date.distantPast
+    func onSwipeAway(_ action: @escaping @MainActor () -> Void) {
+        swipeMonitor = NSEvent.addGlobalMonitorForEvents(matching: .scrollWheel) { [weak self] e in
+            guard let self, e.momentumPhase.isEmpty else { return }   // ignore inertia after the fingers lift
+            // A new gesture: trackpad says .began; a mouse wheel just pauses.
+            if e.phase == .began || Date().timeIntervalSince(self.lastScroll) > 0.35 { self.travel = .zero; self.fired = false }
+            self.lastScroll = Date()
+            let zone = NSRect(x: self.frame.midX - 220, y: self.frame.maxY - 140, width: 440, height: 140)
+            guard !self.fired, NSMouseInRect(NSEvent.mouseLocation, zone, false) else { return }
+            // Fingers moving up (either scrolling direction setting).
+            let up = e.isDirectionInvertedFromDevice ? e.scrollingDeltaY : -e.scrollingDeltaY
+            self.travel.width += abs(e.scrollingDeltaX)
+            self.travel.height += up
+            if self.travel.height > 30 || self.travel.width > 60 {
+                self.fired = true
+                Task { @MainActor in action() }
+            }
+        }
+    }
 }
 
 enum NotchMetrics {

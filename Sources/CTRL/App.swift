@@ -222,6 +222,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.orderFrontRegardless()
         self.panel = panel
         model.onScreenChange = { [weak self] in self?.panel?.reposition() }
+        panel.onSwipeAway { [weak self] in self?.model.swipeAway() }
 
         hotkey.onBegin = { [weak self] dictation in self?.model.begin(dictation: dictation) }
         hotkey.onEnd = { [weak self] in self?.model.end() }

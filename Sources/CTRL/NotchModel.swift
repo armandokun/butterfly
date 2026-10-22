@@ -52,6 +52,10 @@ final class NotchModel: ObservableObject {
             }
         }
         Battery.shared.start()
+        Connectivity.shared.onOffline = { [weak self] in
+            self?.ambient(.badge(symbol: "wifi.slash", text: "No internet", tint: .orange), for: 3)
+        }
+        Connectivity.shared.start()
         Agenda.shared.onSoon = { [weak self] e, minutes in
             NSSound(named: "Tink")?.play()
             let join = Agenda.meetingURL(e) != nil ? " · say “join my meeting”" : ""
@@ -440,6 +444,7 @@ final class NotchModel: ObservableObject {
             remember(text, outcome)
         } catch {
             if let app = AppCatalog.shared.localMatch(text) { return launch(app) }
+            if !Connectivity.shared.online { return show(.badge(symbol: "wifi.slash", text: "No internet", tint: .orange), for: 2.5) }
             show(.message(error.localizedDescription))
         }
     }
@@ -863,6 +868,16 @@ final class NotchModel: ObservableObject {
         dismissTask = Task {
             try? await Task.sleep(for: .seconds(seconds))
             guard !Task.isCancelled else { return }
+            close()
+        }
+    }
+
+    /// Swipe up (or sideways) on the notch: put away whatever it's showing. Listening isn't interrupted.
+    func swipeAway() {
+        switch phase {
+        case .idle, .listening, .thinking: return
+        default:
+            dismissTask?.cancel()
             close()
         }
     }
