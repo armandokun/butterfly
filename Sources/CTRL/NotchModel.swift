@@ -33,10 +33,8 @@ final class NotchModel: ObservableObject {
         }
     }
 
-    private let volumeObserver = VolumeObserver()
     func startObservers() {
-        volumeObserver.onChange = { [weak self] v in self?.ambient(.level(.volume, v), for: 1.4) }
-        volumeObserver.start()
+        // Volume keys: macOS shows its own HUD, so the notch stays quiet (voice "volume up" still shows the bar).
         NowPlaying.shared.start()   // for "what's playing" / media commands; no automatic popups
         Timers.shared.onFinish = { [weak self] t in
             // Always shown, even mid-command: it's what you asked for.
@@ -84,6 +82,28 @@ final class NotchModel: ObservableObject {
     private var dictating = false
     private var typedInDictation = false   // first dictated sentence gets no leading space
     private var lastActionDisplay: CGDirectDisplayID?
+    private var pendingPlaylists: ([String], Date)?
+
+    /// "the second one" / "Mycelia" / "play jet fuel" → one of the offered names.
+    static func pick(_ spoken: String, from names: [String]) -> String? {
+        let fold: (String) -> String = { $0.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil) }
+        let s = fold(spoken)
+        let ordinals = [["first", "one", "1"], ["second", "two", "2"], ["third", "three", "3"], ["fourth", "four", "4", "last"]]
+        let words = Set(s.components(separatedBy: CharacterSet.alphanumerics.inverted))
+        if let i = ordinals.firstIndex(where: { !words.isDisjoint(with: $0) && (s.contains("one") || s.count < 12) }), i < names.count { return names[i] }
+        let letters: (String) -> String = { fold($0).filter { $0.isLetter || $0.isNumber } }
+        let said = letters(spoken)
+        return names.max { a, b in score(letters(a), said) < score(letters(b), said) }.flatMap { score(letters($0), said) >= 0.75 ? $0 : nil }
+    }
+    private static func score(_ name: String, _ said: String) -> Double {
+        guard !name.isEmpty else { return 0 }
+        if said.contains(name) || name.contains(said) && said.count > 3 { return 1 }
+        // Shared characters in order (longest common subsequence) relative to the name.
+        let a = Array(name), b = Array(said)
+        var dp = Array(repeating: 0, count: b.count + 1)
+        for x in a { var prev = 0; for j in 0..<b.count { let t = dp[j + 1]; dp[j + 1] = x == b[j] ? prev + 1 : max(dp[j + 1], dp[j]); prev = t } }
+        return Double(dp[b.count]) / Double(a.count)
+    }
 
     /// Short-term memory entry: what you said, what CTRL did, where.
     private func remember(_ said: String, _ outcome: CommandRouter.Outcome) {
@@ -375,6 +395,16 @@ final class NotchModel: ObservableObject {
     // MARK: Routing
 
     private func handle(_ text: String) async {
+        // Just offered playlists: saying one of them (or "the first one") plays it.
+        if let (names, at) = pendingPlaylists, Date().timeIntervalSince(at) < 30 {
+            pendingPlaylists = nil
+            if let name = Self.pick(text, from: names), let r = MediaController.play(playlist: name) {
+                try? await Task.sleep(for: .milliseconds(250))
+                if NowPlaying.shared.track != nil { show(.nowPlaying, for: 2.6) }
+                else { show(.media(r.player, title: r.title, detail: r.detail), for: 2.2) }
+                return
+            }
+        }
         guard let key = Keychain.apiKey else {
             // No key yet: simple fallbacks so the app still works.
             if let app = AppCatalog.shared.localMatch(text) { return launch(app) }
@@ -585,13 +615,18 @@ final class NotchModel: ObservableObject {
                     show(.media(icon, title: "Couldn't \(item.title.lowercased())", detail: "\(app.localizedName ?? "The app") didn't accept it"), for: 2.2)
                 }
             case .open(let plan): launch(plan)
-            case .media(let action, let preferred):
+            case .media(let action, let preferred, let query):
                 if action == .show {
                     if NowPlaying.shared.track != nil { show(.nowPlaying, for: 4) }
                     else { show(.media(nil, title: "Nothing is playing", detail: nil), for: 1.6) }
                     break
                 }
-                let result = await MediaController.perform(action, preferred: preferred)
+                let result = await MediaController.perform(action, preferred: preferred, query: query)
+                if !result.suggestions.isEmpty {
+                    pendingPlaylists = (result.suggestions, Date())
+                    show(.answer(title: result.title, text: "Say one: " + result.suggestions.joined(separator: " · ")), for: 8)
+                    break
+                }
                 try? await Task.sleep(for: .milliseconds(250))   // let the now-playing stream catch up
                 if NowPlaying.shared.track != nil { show(.nowPlaying, for: 2.6) }
                 else { show(.media(result.player, title: result.title, detail: result.detail), for: 2.2) }

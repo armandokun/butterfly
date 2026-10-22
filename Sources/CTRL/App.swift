@@ -149,10 +149,10 @@ struct CTRLMain {
                         print("executed: \(r.title) \(r.detail ?? "")")
                         try? await Task.sleep(for: .seconds(1))   // let deferred activation run
                     }
-                } else if case .media(let action, let preferred) = outcome {
-                    print("outcome: media \(action.rawValue) preferred=\(preferred ?? "-") \(ms)")
+                } else if case .media(let action, let preferred, let query) = outcome {
+                    print("outcome: media \(action.rawValue) preferred=\(preferred ?? "-") query=\(query ?? "-") \(ms)")
                     if exec {
-                        let r = await MediaController.perform(action, preferred: preferred)
+                        let r = await MediaController.perform(action, preferred: preferred, query: query)
                         print("executed: \(r.player?.name ?? "media key") — \(r.title) \(r.detail ?? "")")
                     }
                 } else if case .agent(let request) = outcome {

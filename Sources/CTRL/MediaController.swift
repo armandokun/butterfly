@@ -10,6 +10,7 @@ enum MediaController {
         let player: InstalledApp?
         let title: String
         let detail: String?
+        var suggestions: [String] = []   // no playlist matched: a few to pick from next
     }
 
     private static let players: [(name: String, bundle: String)] = [
@@ -18,7 +19,9 @@ enum MediaController {
     ]
 
     /// `preferred`: the player named in the command, if any ("play music on Spotify").
-    static func perform(_ action: Action, preferred: String?) async -> Result {
+    /// `query`: words that name a playlist ("play focus music" → "focus"); played from Music if one matches.
+    static func perform(_ action: Action, preferred: String?, query: String? = nil) async -> Result {
+        if action == .play, let query, preferred != "Spotify", let r = await playPlaylist(matching: query) { return r }
         let player = pickPlayer(for: action, preferred: preferred)
 
         guard let player else {
@@ -84,6 +87,43 @@ enum MediaController {
         case .previous: return "tell application \"\(name)\" to previous track"
         case .show: return ""
         }
+    }
+
+    // MARK: Playlists
+
+    /// Words from "play (my) focus music (playlist)" that could name a playlist; nil for plain "play music".
+    static func playlistQuery(_ spoken: String) -> String? {
+        let filler: Set<String> = ["play", "start", "put", "on", "some", "my", "the", "a", "music", "playlist", "songs", "song",
+                                   "please", "in", "from", "apple", "app", "resume", "me", "for", "list", "tracks", "and"]
+        let words = spoken.lowercased().components(separatedBy: CharacterSet.letters.union(.decimalDigits).inverted)
+            .filter { !$0.isEmpty && !filler.contains($0) }
+        return words.isEmpty ? nil : words.joined(separator: " ")
+    }
+
+    /// Best Music playlist for the query: every query word must appear in the name; shortest name wins.
+    /// No match → a few suggestions (partial word matches first, then your own playlists).
+    private static func playPlaylist(matching query: String) async -> Result? {
+        guard let list = run("tell application \"Music\" to get name of every playlist") else { return nil }
+        let names = list.components(separatedBy: ", ")
+        let words = query.split(separator: " ").map(String.init)
+        let fold: (String) -> String = { $0.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil) }
+        guard let name = names.filter({ n in words.allSatisfy { fold(n).contains(fold($0)) } })
+            .min(by: { $0.count < $1.count }) else {
+            let builtIn: Set<String> = ["Library", "Music", "Music Videos", "Favourite Songs", "Favorite Songs", "Downloaded", "Recently Added", "Top 25 Most Played"]
+            let own = names.filter { !builtIn.contains($0) }
+            let partial = own.filter { n in words.contains { $0.count > 2 && fold(n).contains(fold($0)) } }
+            let pick = Array((partial + own.filter { !partial.contains($0) }.shuffled()).prefix(4))
+            guard !pick.isEmpty else { return nil }
+            return Result(player: AppCatalog.shared.app(named: "Music"), title: "No “\(query)” playlist", detail: nil, suggestions: pick)
+        }
+        return play(playlist: name)
+    }
+
+    /// Plays a playlist by exact name, shuffled.
+    static func play(playlist name: String) -> Result? {
+        let quoted = name.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        guard run("tell application \"Music\"\nset shuffle enabled to true\nplay playlist \"\(quoted)\"\nend tell") != nil else { return nil }
+        return Result(player: AppCatalog.shared.app(named: "Music"), title: name, detail: "Playing playlist")
     }
 
     // MARK: Helpers

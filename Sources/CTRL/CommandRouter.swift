@@ -4,7 +4,7 @@ import AppKit
 struct CommandRouter {
     enum Outcome {
         case open(WindowManager.Plan)
-        case media(MediaController.Action, preferred: String?)
+        case media(MediaController.Action, preferred: String?, query: String? = nil)
         case settings(SettingsController.Page, SettingsController.Action)
         case system(SystemController.Action, level: Int?)
         case timer(Timers.Action, seconds: TimeInterval?)
@@ -387,7 +387,7 @@ struct CommandRouter {
         }
         if let intent, let action = MediaController.Action(rawValue: intent) {
             let preferred = spoken.contains("spotify") ? "Spotify" : (spoken.contains("apple music") || spoken.contains("music app")) ? "Music" : nil
-            return .media(action, preferred: preferred)
+            return .media(action, preferred: preferred, query: action == .play ? MediaController.playlistQuery(spoken) : nil)
         }
         guard intent == "open" else { return .notACommand }
 
