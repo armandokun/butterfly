@@ -27,6 +27,7 @@
 		588025F4317DA7CF0E8F48DA /* QuickSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = E643F0F351724AC6503CA5B9 /* QuickSettings.swift */; };
 		5B0C4575C15B368BE767970C /* Routines.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF7229BDA4850A8CF92DCCB8 /* Routines.swift */; };
 		5DA4626C8FEFF040E408BB0A /* Agenda.swift in Sources */ = {isa = PBXBuildFile; fileRef = E14EE5DCEF56B6E88032DF7E /* Agenda.swift */; };
+		5F02063294FD1C693CD26F72 /* Shortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8749B3337B80DE3061631340 /* Shortcuts.swift */; };
 		616856131D72B9E43D3A03D4 /* ScreenReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E2249E58A4D58DB91135D3F /* ScreenReader.swift */; };
 		666CFE56F2CC18371598E2A3 /* RoutinesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D67E9E19E464BF3A208B845 /* RoutinesView.swift */; };
 		6B4F6DF9BE82399D88FA6F8A /* NowPlaying.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A85BFED9266D54D2DC83FC0 /* NowPlaying.swift */; };
@@ -88,6 +89,7 @@
 		74E3007D72F748CC8D287724 /* App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
 		805A2D33C4F848A8520788DA /* menubar@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "menubar@2x.png"; sourceTree = "<group>"; };
 		81E61D52949F8A4FEB385FF0 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = wrapper.icon; path = AppIcon.icon; sourceTree = "<group>"; };
+		8749B3337B80DE3061631340 /* Shortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Shortcuts.swift; sourceTree = "<group>"; };
 		8A915CB183840C959A9A5221 /* WindowManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowManager.swift; sourceTree = "<group>"; };
 		8FA857965656771DDC3B5ADB /* TypeSafeClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypeSafeClient.swift; sourceTree = "<group>"; };
 		95EFDDD3FE7DCCA29E1D226C /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
@@ -194,6 +196,7 @@
 				2E2249E58A4D58DB91135D3F /* ScreenReader.swift */,
 				43197F7E43AAB26ECDD9B9C4 /* SettingsController.swift */,
 				95EFDDD3FE7DCCA29E1D226C /* SettingsView.swift */,
+				8749B3337B80DE3061631340 /* Shortcuts.swift */,
 				1DC8A9CB2FB33A26D859C33C /* SystemController.swift */,
 				32ACB3B02701F70F2A2CF9BF /* SpeechRecorder.swift */,
 				A30DD644FF94AE96E2F318B2 /* Timers.swift */,
@@ -317,6 +320,7 @@
 				616856131D72B9E43D3A03D4 /* ScreenReader.swift in Sources */,
 				BE00233286C98855552D8087 /* SettingsController.swift in Sources */,
 				12F5796FB9E1DA8A1421580B /* SettingsView.swift in Sources */,
+				5F02063294FD1C693CD26F72 /* Shortcuts.swift in Sources */,
 				B4DB7429C48C9EBEAD26BB52 /* SpeechRecorder.swift in Sources */,
 				A0711830BE6789B37A294EB8 /* SystemController.swift in Sources */,
 				394F30FD163FE075A0D49037 /* Timers.swift in Sources */,

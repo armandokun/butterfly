@@ -486,6 +486,12 @@ final class NotchModel: ObservableObject {
                 show(.system(symbol: r.symbol, title: r.title, detail: r.detail), for: 1.0)
             case .screen(let action, let request): await screen(action, request: request)
             case .agent(let request): await agent(request)
+            case .webSearch(let url, let query, let engine):
+                NSWorkspace.shared.open(url)
+                show(.system(symbol: "magnifyingglass", title: query, detail: "Searching \(engine)"), for: 1.6)
+            case .press(let combo):
+                await KeyPress.perform(combo, in: frontApp)
+                show(.system(symbol: "keyboard", title: combo.label + (combo.times > 1 ? " ×\(combo.times)" : ""), detail: nil), for: 0.9)
             case .quickSetting(let key, let on):
                 guard let s = QuickSettings.setting(key) else { break }
                 let before = s.get()
@@ -705,6 +711,11 @@ final class NotchModel: ObservableObject {
             case .previousTab: .nextTab
             case .previousApp: .previousApp
             default: nil
+            }
+            if nav == .showDesktop {
+                let visible = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular && !$0.isHidden && $0.bundleIdentifier != "com.apple.finder" }
+                Undo.register("windows back") { for a in visible { a.unhide() }; app?.activate() }
+                break
             }
             if let reverse { Undo.register("went back") { _ = await KeyCommands.perform(reverse, in: app) } } else { Undo.clear() }
         case .edit(let e):

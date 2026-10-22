@@ -11,6 +11,7 @@ enum KeyCommands {
         case back, forward
         case nextTab = "next_tab", previousTab = "previous_tab", reopenTab = "reopen_tab"
         case previousApp = "previous_app"
+        case showDesktop = "show_desktop", copyLink = "copy_link"
     }
 
     enum Edit: String {
@@ -34,7 +35,9 @@ enum KeyCommands {
         "next_tab": "the next tab, the tab to the right",
         "previous_tab": "the previous tab, the tab to the left",
         "reopen_tab": "reopen / bring back the tab that was just closed",
-        "previous_app": "switch back to the previous app, the last app, the other app",
+        "previous_app": "switch back to the previous app, the last app, the other app (no app named)",
+        "show_desktop": "show the desktop: get every window out of the way, hide everything, clear the screen",
+        "copy_link": "copy the link / URL / web address of the current page or tab",
     ])
 
     static let editQuestion = TypeSafeClient.Question.choice("What text editing does the user want in the current text field?", options: [
@@ -98,6 +101,24 @@ enum KeyCommands {
             guard let p = previous, !p.isTerminated, p != app else { return Result(symbol: "rectangle.2.swap", title: "No previous app", detail: nil) }
             p.activate()
             return Result(symbol: "rectangle.2.swap", title: p.localizedName ?? "Switched", detail: nil)
+        case .showDesktop:
+            // Hide every regular app (Finder's windows minimize), so only the desktop is left.
+            for a in NSWorkspace.shared.runningApplications where a.activationPolicy == .regular && !a.isHidden {
+                if a.bundleIdentifier == "com.apple.finder" { continue }
+                a.hide()
+            }
+            NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first?.activate()
+            return Result(symbol: "menubar.dock.rectangle", title: "Desktop", detail: nil)
+        case .copyLink:
+            // Address bar: focus it, copy, put focus back. Works in Safari, Chrome, Dia, Arc, Firefox…
+            Keys.press(37, flags: .maskCommand)                    // ⌘L
+            try? await Task.sleep(for: .milliseconds(120))
+            Keys.press(8, flags: .maskCommand)                     // ⌘C
+            try? await Task.sleep(for: .milliseconds(80))
+            Keys.press(53, flags: [])                              // Esc
+            try? await Task.sleep(for: .milliseconds(80))
+            let link = NSPasteboard.general.string(forType: .string)
+            return Result(symbol: "link", title: "Copied link", detail: link.flatMap { URL(string: $0)?.host() } ?? link.map { String($0.prefix(40)) })
         }
     }
 

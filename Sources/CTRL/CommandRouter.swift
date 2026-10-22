@@ -33,6 +33,8 @@ struct CommandRouter {
         case pasteHistory(Clipboard.Item)
         case clipboardList
         case agent(String)                       // second layer: the on-device LLM plans and does it
+        case webSearch(URL, query: String, engine: String)
+        case press(KeyPress.Combo)
         case unsure(best: InstalledApp?)
         case needAddress
         case notACommand
@@ -82,7 +84,9 @@ struct CommandRouter {
 
         var questions: [String: TypeSafeClient.Question] = [
             "intent": .choice("What does the user want the computer to do?", options: [
-                "open": "open, launch, show, put, place, or arrange applications and/or websites on screen (domains with any ending such as .com, .sh, .ai, .io)",
+                "open": "open, launch, show, put, place, or arrange applications and/or websites on screen (domains with any ending such as .com, .sh, .ai, .io); also switch to / go to / bring up a named app ('switch to Discord')",
+                "search": "search the web, Google, YouTube, Amazon, Maps, or Wikipedia for something ('search google for flights to paris', 'google best pizza near me', 'look up the weather in Rome', 'find cat videos on youtube')",
+                "keys": "press a specific keyboard key or shortcut by name: escape, enter, tab, space, arrow keys, delete, F5, or a combination like command shift T, control C ('press escape', 'hit enter', 'press command K')",
                 "play_music": "play, start, resume, or put on music, a song, or a podcast",
                 "pause_music": "pause, stop, or silence the music or whatever is playing",
                 "next_track": "skip to the next song or track",
@@ -95,9 +99,9 @@ struct CommandRouter {
                 "system": "change the volume (louder, quieter, mute, unmute) or screen brightness, lock the screen, put the Mac to sleep, turn the display off, take a screenshot, empty the Trash, or ask how much battery is left / whether it's charging",
                 "window": "move, snap, resize, center, maximize, minimize, close, or full-screen the current window (or a named app's window), send it to another screen, or hide or quit an app that's already open, or hide all other apps",
                 "click": "click, press, tap, or select something visible on screen: a button, link, tab, field, message, item, desktop widget, Dock icon, or menu bar icon (e.g. 'click send', 'press the blue button', 'click the first result', 'click the weather widget')",
-                "files": "open a folder (Downloads, Desktop, Documents, iCloud), open the latest download or screenshot, or find / open a specific file or document on the Mac. 'Show me the desktop' means the Desktop folder",
+                "files": "open a folder (Downloads, Desktop, Documents, iCloud), open the latest download or screenshot, or find / open a specific file or document on the Mac. 'Open the Desktop folder' means the Desktop folder; 'show desktop' / 'show me the desktop' means hide every window (navigate)",
                 "calendar": "only ASK about the existing calendar (not adding anything), schedule, meetings, or events (what's next, what's on today/tomorrow, am I free), or join the current/next meeting or video call",
-                "navigate": "scroll up or down, go to the top or bottom of the page, go back or forward a page, next or previous tab, reopen the closed tab, or switch back to the previous app",
+                "navigate": "scroll up or down, go to the top or bottom of the page, go back or forward a page, next or previous tab, reopen the closed tab, switch back to the previous app, show the desktop (hide all windows), or copy the link / URL of the current page",
                 "edit": "edit text in the current text field: select or delete the last word, sentence, or line, 'scratch that', select all, copy (also 'copy that', 'copy this'), cut, paste, redo, new line, new paragraph, go to the end/start",
                 "screen": "summarize, explain, or read aloud what's on screen (page, article, email, error, document), answer a question about it, write a reply to the message on screen, or stop reading aloud",
                 "task": "a request that needs understanding content and doing something with it, or several steps: take something on screen (a message, email, invite, page) and put it somewhere — calendar, reminders, a note — e.g. 'grab the last message and put it in my calendar', 'add this to my reminders', 'make an event from this email', 'remind me to call mom tomorrow at 5'. Any request to ADD, create, or schedule a calendar event or reminder ('add a dentist appointment on Nov 3 to my calendar')",
@@ -289,6 +293,18 @@ struct CommandRouter {
             if let a = response.choice("clip_item"), let item = Clipboard.shared.item(a.choice) { return .pasteHistory(item) }
         }
         if intent == "task" { return .agent(transcript) }
+        if intent == "search" || (intent == "open" && Self.looksLikeSearch(transcript)), let s = WebSearch.parse(transcript) {
+            return .webSearch(s.url, query: s.query, engine: s.engine)
+        }
+        // "Press escape" / "press command K". Fails for "press the blue button" (not a key), which stays a click.
+        if ["keys", "click", "navigate", "edit"].contains(intent ?? ""), let combo = KeyPress.parse(transcript) {
+            return .press(combo)
+        }
+        // "Switch to Discord": a named app means open/activate it, not "the previous app".
+        if intent == "navigate", response.choice("nav_action")?.choice == "previous_app",
+           checks.contains(where: { $0.value.hasPrefix("app:") && (response.noul($0.key) ?? 0) >= Self.extraThreshold }) {
+            intent = "open"
+        }
         if intent == "calendar", let a = response.choice("calendar_action"), let action = Agenda.Action(rawValue: a.choice) { return .calendar(action) }
         if intent == "navigate", let a = response.choice("nav_action"), let action = KeyCommands.Nav(rawValue: a.choice) { return .navigate(action) }
         if intent == "edit", let a = response.choice("edit_action"), let action = KeyCommands.Edit(rawValue: a.choice) {
@@ -493,6 +509,10 @@ struct CommandRouter {
         // Both must agree: "it's here" alone gives false positives (found a "purple elephant").
         guard let b = response.box("target_\(best)"), (response.noul("visible_\(best)") ?? 0) >= 0.5, b.confidence >= 0.3 else { return nil }
         return Clicker.point(in: shots[best], box: b.box)
+    }
+
+    private static func looksLikeSearch(_ spoken: String) -> Bool {
+        spoken.lowercased().range(of: #"^\s*(please\s+)?(search|google|look\s+up)\b"#, options: .regularExpression) != nil
     }
 
     private static func mentions(_ spoken: String, _ name: String) -> Bool {
