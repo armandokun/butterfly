@@ -59,13 +59,11 @@ final class NotchModel: ObservableObject {
             Memory.record(said: "(automatic)", did: "reminded: \(e.title ?? "meeting") starts in \(minutes) min")
         }
         Agenda.shared.start()
-        brightnessKeys.onChange = { [weak self] v in self?.ambient(.level(.brightness, v), for: 1.4) }
-        brightnessKeys.start()
+        // Brightness keys: same, macOS shows its own HUD.
         KeyCommands.startTracking()
         Clipboard.shared.start()
         Timers.shared.restore()
     }
-    private let brightnessKeys = BrightnessKeys()
     private var lastTyped: String?
     private var peakLevel: CGFloat = 0   // loudest sound this press: 0 = the mic heard nothing
 
