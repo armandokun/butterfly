@@ -52,9 +52,6 @@ final class NotchModel: ObservableObject {
             }
         }
         Battery.shared.start()
-        Connectivity.shared.onOffline = { [weak self] in
-            self?.ambient(.badge(symbol: "wifi.slash", text: "No internet", tint: .orange), for: 3)
-        }
         Connectivity.shared.start()
         Agenda.shared.onSoon = { [weak self] e, minutes in
             NSSound(named: "Tink")?.play()
@@ -444,7 +441,7 @@ final class NotchModel: ObservableObject {
             remember(text, outcome)
         } catch {
             if let app = AppCatalog.shared.localMatch(text) { return launch(app) }
-            if !Connectivity.shared.online { return show(.badge(symbol: "wifi.slash", text: "No internet", tint: .orange), for: 2.5) }
+            if Connectivity.shared.explains(error) { return show(.badge(symbol: "wifi.slash", text: "No internet", tint: .orange), for: 2.5) }
             show(.message(error.localizedDescription))
         }
     }

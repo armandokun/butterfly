@@ -1,33 +1,26 @@
 import Foundation
 import Network
 
-/// Online / offline. Tells the notch once when the connection drops (after a short grace period, so Wi-Fi blips stay silent).
+/// Online / offline, for explaining failed commands ("No internet"). Never shows anything on its own.
 @MainActor
 final class Connectivity {
     static let shared = Connectivity()
     private(set) var online = true
-    var onOffline: (() -> Void)?
-
     private let monitor = NWPathMonitor()
-    private var pending: Task<Void, Never>?
 
     func start() {
         monitor.pathUpdateHandler = { [weak self] path in
             let up = path.status == .satisfied
-            Task { @MainActor in self?.update(up) }
+            Task { @MainActor in self?.online = up }
         }
         monitor.start(queue: .global(qos: .utility))
     }
 
-    private func update(_ up: Bool) {
-        pending?.cancel()
-        if up { online = true; return }
-        pending = Task {
-            try? await Task.sleep(for: .seconds(3))
-            guard !Task.isCancelled else { return }
-            let wasOnline = self.online
-            self.online = false
-            if wasOnline { self.onOffline?() }
-        }
+    /// The command failed because there's no connection (offline, or the request itself couldn't reach the network).
+    func explains(_ error: Error) -> Bool {
+        if !online { return true }
+        let codes: Set<URLError.Code> = [.notConnectedToInternet, .networkConnectionLost, .cannotFindHost,
+                                         .cannotConnectToHost, .dnsLookupFailed, .timedOut, .dataNotAllowed]
+        return (error as? URLError).map { codes.contains($0.code) } ?? false
     }
 }
