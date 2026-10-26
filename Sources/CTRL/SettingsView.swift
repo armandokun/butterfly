@@ -71,6 +71,9 @@ private struct GeneralPane: View {
     @State private var trusted = HotkeyMonitor.hasAccessibility
     @State private var appCount = AppCatalog.shared.apps.count
     @State private var login = LoginItem.enabled
+    @AppStorage("developerMode") private var developer = false
+    @AppStorage("listeningSounds") private var sounds = true
+    @AppStorage("duckMusic") private var duck = true
     @State private var mic = AudioInput.preferredUID
     @State private var mics = AudioInput.devices
 
@@ -116,6 +119,13 @@ private struct GeneralPane: View {
             }
 
             PondSection(title: "System", tint: Pond.teal) {
+                PondRow(title: "Sounds when listening starts and stops") {
+                    Toggle("", isOn: $sounds).labelsHidden().toggleStyle(.switch).tint(Pond.moss)
+                        .onChange(of: sounds) { if sounds { Cues.listening() } }
+                }
+                PondRow(title: "Lower music while listening") {
+                    Toggle("", isOn: $duck).labelsHidden().toggleStyle(.switch).tint(Pond.moss)
+                }
                 PondRow(title: "Open at login") {
                     Toggle("", isOn: $login).labelsHidden().toggleStyle(.switch).tint(Pond.moss)
                         .onChange(of: login) { LoginItem.set(login); login = LoginItem.enabled }
@@ -129,13 +139,16 @@ private struct GeneralPane: View {
                         .buttonStyle(.pond(Pond.peach))
                     }
                 }
-                PondRow(title: "\(appCount) apps found", last: true) {
+                PondRow(title: "\(appCount) apps found") {
                     Button("Rescan") { AppCatalog.shared.reload(); appCount = AppCatalog.shared.apps.count }
                         .buttonStyle(.pond(Pond.teal))
                 }
+                PondRow(title: "Developer mode", last: true) {
+                    Toggle("", isOn: $developer).labelsHidden().toggleStyle(.switch).tint(Pond.moss)
+                }
             }
             if LoginItem.needsApproval {
-                Button("Allow CTRL in Login Items") { SMAppService.openSystemSettingsLoginItems() }.buttonStyle(.pond(Pond.peach))
+                Button("Allow Butterfly in Login Items") { SMAppService.openSystemSettingsLoginItems() }.buttonStyle(.pond(Pond.peach))
             }
         }
         .padding(20)
@@ -151,7 +164,7 @@ private struct VocabularyPane: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                Text("Words CTRL should hear right")
+                Text("Words Butterfly should hear right")
                     .font(Pond.display(26)).foregroundStyle(Pond.ink)
                     .padding(.horizontal, 8).background(Pond.lime)
                 PondSection(title: "Vocabulary", tint: Pond.peach,

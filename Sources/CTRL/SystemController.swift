@@ -13,8 +13,10 @@ enum SystemController {
         case screenshotFull = "screenshot_full", screenshotArea = "screenshot_area", screenshotWindow = "screenshot_window"
         case emptyTrash = "empty_trash"
         case battery = "battery_status"
+        case keyboardOn = "keyboard_light_on", keyboardOff = "keyboard_light_off"
+        case keyboardUp = "keyboard_light_up", keyboardDown = "keyboard_light_down", keyboardSet = "keyboard_light_set"
 
-        var isLevel: Bool { self == .volumeSet || self == .brightnessSet }
+        var isLevel: Bool { self == .volumeSet || self == .brightnessSet || self == .keyboardSet }
     }
 
     struct Result {
@@ -31,6 +33,11 @@ enum SystemController {
         "brightness_up": "make the screen brighter, brightness up",
         "brightness_down": "make the screen dimmer/darker, brightness down",
         "brightness_set": "set screen brightness to a specific level (a number, percent, half, max, minimum)",
+        "keyboard_light_on": "turn the keyboard backlight / keyboard light on ('light up the keyboard', 'keyboard light on')",
+        "keyboard_light_off": "turn the keyboard backlight off",
+        "keyboard_light_up": "make the keyboard backlight brighter",
+        "keyboard_light_down": "make the keyboard backlight dimmer",
+        "keyboard_light_set": "set the keyboard backlight to a specific level (a number, percent, half, max)",
         "lock": "lock the screen / lock the Mac",
         "sleep": "put the Mac to sleep",
         "display_off": "turn the display/screen off (but don't sleep the Mac)",
@@ -101,6 +108,18 @@ enum SystemController {
             }
             let what = action == .screenshotFull ? "Screenshot" : action == .screenshotArea ? "Select an area" : "Click a window"
             return Result(symbol: "camera.viewfinder", title: what, detail: nil)
+        case .keyboardOn, .keyboardOff, .keyboardUp, .keyboardDown, .keyboardSet:
+            guard let now = KeyboardLight.level else {
+                return Result(symbol: "keyboard", title: "No keyboard backlight", detail: "This keyboard has no light Butterfly can control")
+            }
+            let target = switch action {
+            case .keyboardOn: level ?? (now > 0 ? max(now, 50) : 75)
+            case .keyboardOff: 0
+            case .keyboardSet: level ?? now
+            default: now + (action == .keyboardUp ? 1 : -1) * (level ?? 20)
+            }
+            let v = KeyboardLight.set(target)
+            return Result(symbol: v == 0 ? "light.min" : "light.max", title: v == 0 ? "Keyboard light off" : "Keyboard light \(v)%", detail: nil, level: (.keyboard, v))
         case .battery:
             guard let b = Battery.now else { return Result(symbol: "powerplug.fill", title: "No battery", detail: "This Mac runs on power") }
             return Result(symbol: Battery.symbol(b), title: "Battery \(b.percent)%", detail: Battery.detail(b))
@@ -189,5 +208,43 @@ enum Keys {
             e?.flags = flags
             e?.post(tap: .cghidEventTap)
         }
+    }
+}
+
+/// Keyboard backlight. No public API: CoreBrightness's KeyboardBrightnessClient (what Control Center uses).
+/// Loaded at runtime; if Apple changes it, the command just reports "no keyboard backlight".
+@MainActor
+enum KeyboardLight {
+    private typealias Get = @convention(c) (AnyObject, Selector, UInt64) -> Float
+    private typealias Set = @convention(c) (AnyObject, Selector, Float, UInt64) -> Bool
+    private typealias Auto = @convention(c) (AnyObject, Selector, Bool, UInt64) -> Bool
+
+    private static let client: NSObject? = {
+        dlopen("/System/Library/PrivateFrameworks/CoreBrightness.framework/CoreBrightness", RTLD_NOW)
+        return (NSClassFromString("KeyboardBrightnessClient") as? NSObject.Type)?.init()
+    }()
+    private static var keyboard: UInt64? {
+        guard let c = client, c.responds(to: NSSelectorFromString("copyKeyboardBacklightIDs")) else { return nil }
+        let ids = c.perform(NSSelectorFromString("copyKeyboardBacklightIDs"))?.takeRetainedValue() as? [NSNumber]
+        return ids?.first?.uint64Value
+    }
+
+    /// 0…100, nil when there's no controllable backlight.
+    static var level: Int? {
+        let sel = NSSelectorFromString("brightnessForKeyboard:")
+        guard let c = client, let k = keyboard, c.responds(to: sel) else { return nil }
+        return Int((unsafeBitCast(c.method(for: sel), to: Get.self)(c, sel, k) * 100).rounded())
+    }
+
+    @discardableResult
+    static func set(_ percent: Int) -> Int {
+        let v = max(0, min(100, percent))
+        let sel = NSSelectorFromString("setBrightness:forKeyboard:")
+        guard let c = client, let k = keyboard, c.responds(to: sel) else { return level ?? 0 }
+        // Ambient auto-dimming would undo a manual "on" in a bright room: turn it off when setting by voice.
+        let auto = NSSelectorFromString("enableAutoBrightness:forKeyboard:")
+        if c.responds(to: auto) { _ = unsafeBitCast(c.method(for: auto), to: Auto.self)(c, auto, false, k) }
+        _ = unsafeBitCast(c.method(for: sel), to: Set.self)(c, sel, Float(v) / 100, k)
+        return v
     }
 }

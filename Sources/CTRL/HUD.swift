@@ -5,11 +5,13 @@ import SwiftUI
 
 /// Volume / brightness level, shown as a compact live activity beside the notch (DynamicNotch's HUD).
 enum LevelKind: Equatable {
-    case volume, brightness
+    case volume, brightness, keyboard
+    var label: String { switch self { case .volume: "Volume"; case .brightness: "Brightness"; case .keyboard: "Keyboard light" } }
 
     func symbol(for level: Int) -> String {
         switch self {
         case .brightness: level < 50 ? "sun.min.fill" : "sun.max.fill"
+        case .keyboard: level == 0 ? "light.min" : "light.max"
         case .volume:
             switch level {
             case ..<1: "speaker.slash.fill"
@@ -29,18 +31,16 @@ struct LevelBar: View {
     var height: CGFloat = 6
 
     private var p: CGFloat { CGFloat(max(0, min(100, level))) / 100 }
-    private var tint: Color {
-        level <= 0 ? .white.opacity(0.45) : Color(hue: 0.33 * (1 - Double(p)), saturation: 0.86, brightness: 0.98)
-    }
+    /// macOS volume/brightness HUD: plain off-white fill on a dim track.
+    private var tint: Color { Color(white: level <= 0 ? 0.5 : 0.94) }
 
     var body: some View {
         Capsule().fill(.white.opacity(0.18))
             .frame(width: width, height: height)
             .overlay(alignment: .leading) {
                 Capsule()
-                    .fill(LinearGradient(colors: [tint.opacity(0.82), tint], startPoint: .leading, endPoint: .trailing))
+                    .fill(tint)
                     .frame(width: width * p, height: height)
-                    .shadow(color: tint.opacity(0.8), radius: 5)
             }
             .animation(.snappy(duration: 0.28, extraBounce: 0.12), value: level)
     }

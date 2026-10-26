@@ -97,3 +97,35 @@ enum WebSearch {
         return (url, q, engine.label)
     }
 }
+
+/// The default browser (Dia): searches open as a new tab; questions get typed into a new tab's bar so its AI answers.
+@MainActor
+enum BrowserTab {
+    static func open(_ url: URL) {
+        guard let app = AppCatalog.shared.defaultBrowser else { NSWorkspace.shared.open(url); return }
+        let c = NSWorkspace.OpenConfiguration(); c.activates = true
+        NSWorkspace.shared.open([url], withApplicationAt: app.url, configuration: c)
+    }
+
+    @discardableResult
+    static func ask(_ question: String) async -> InstalledApp? {
+        let app = AppCatalog.shared.defaultBrowser
+        guard let app else {
+            open(URL(string: "https://www.google.com/search?q=" + (question.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""))!)
+            return nil
+        }
+        let id = Bundle(url: app.url)?.bundleIdentifier ?? ""
+        let running = NSRunningApplication.runningApplications(withBundleIdentifier: id).first
+        if let running { running.activate() }
+        else { _ = try? await NSWorkspace.shared.openApplication(at: app.url, configuration: .init()) }
+        // Wait until it's frontmost (cold launch takes longer), then ⌘T and type into the new tab's bar.
+        for _ in 0..<40 where NSWorkspace.shared.frontmostApplication?.bundleIdentifier != id {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        try? await Task.sleep(for: .milliseconds(running == nil ? 900 : 150))
+        Keys.press(17, flags: .maskCommand)   // ⌘T
+        try? await Task.sleep(for: .milliseconds(350))
+        await Typer.type(question, pressReturn: true)
+        return app
+    }
+}

@@ -45,13 +45,10 @@ struct CTRLMain {
             }
             RunLoop.main.run()
         }
-        if let i = args.firstIndex(of: "--project-run"), i + 1 < args.count {
-            // Debug: how "test it locally" would run a Cursor project.
-            for name in args[(i + 1)...] {
-                let dir = ProjectRunner.folder(named: name)
-                let run = dir.flatMap(ProjectRunner.detect)
-                print(name, "→", dir?.path ?? "no folder", "→", run.map { "\($0.command) web=\($0.web) port=\($0.port.map(String.init) ?? "detect")" } ?? "unknown")
-            }
+        if args.contains("--playlist-art") {
+            let names = MediaController.ownPlaylists().prefix(4)
+            print("playlists:", Array(names))
+            for (n, img) in MediaController.artwork(for: Array(names)) { print(n, "→", img.map { "\($0.size)" } ?? "none") }
             return
         }
         if let i = args.firstIndex(of: "--route"), i + 1 < args.count {
@@ -69,6 +66,7 @@ struct CTRLMain {
     @MainActor static func routeFromCLI(_ text: String) {
         let exec = CommandLine.arguments.contains("--exec")
         let text = text.replacingOccurrences(of: "--exec", with: "").trimmingCharacters(in: .whitespaces)
+        AudioOutput.warm()
         AppCatalog.shared.reload()
         print("sites:", URLExtractor.candidates(in: text))
         guard let key = Keychain.apiKey else { print("no API key"); exit(1) }
@@ -116,6 +114,9 @@ struct CTRLMain {
                         print("executed: \(r.title) \(r.detail ?? "")")
                         try? await Task.sleep(for: .seconds(1))
                     }
+                } else if case .askBrowser(let q) = outcome {
+                    print("outcome: askBrowser “\(q)” \(ms)")
+                    if exec { let b = await BrowserTab.ask(q); print("executed in \(b?.name ?? "-")"); try? await Task.sleep(for: .seconds(1)) }
                 } else if case .type(let text, let ret) = outcome {
                     print("outcome: type “\(text)” return=\(ret) \(ms)")
                     if exec { front?.activate(); try? await Task.sleep(for: .milliseconds(300)); await Typer.type(text, pressReturn: ret); print("executed") }
@@ -233,6 +234,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        AudioOutput.warm()
         if Installer.offerMoveToApplications() { return }
         AppCatalog.shared.reload()
 
@@ -243,6 +245,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.onSwipeAway { [weak self] in self?.model.swipeAway() }
 
         hotkey.onBegin = { [weak self] dictation in self?.model.begin(dictation: dictation) }
+        hotkey.onArm = { [weak self] in self?.model.arm() }
+        hotkey.onDisarm = { [weak self] in self?.model.disarm() }
+        hotkey.onArm = { [weak self] in self?.model.arm() }
+        hotkey.onDisarm = { [weak self] in self?.model.disarm() }
         hotkey.onEnd = { [weak self] in self?.model.end() }
         hotkey.onCancel = { [weak self] in self?.model.cancel() }
         hotkey.onLock = { [weak self] dictation in self?.model.lock(dictation: dictation) }
@@ -265,6 +271,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if let s = ProcessInfo.processInfo.environment["CTRL_TIMER"].flatMap(Double.init) {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { _ = Timers.shared.start(s) }
+        }
+        if let lines = ProcessInfo.processInfo.environment["CTRL_SPEAK"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { self.model.speakTest(lines.components(separatedBy: "|")) }
+        }
+        if ProcessInfo.processInfo.environment["CTRL_PTT"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { self.model.pttTest() }
+        }
+        if let say = ProcessInfo.processInfo.environment["CTRL_SAY"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.model.say(say.components(separatedBy: "|")) }
+        }
+        if ProcessInfo.processInfo.environment["CTRL_GALLERY"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.model.runGallery() }
+            return
         }
         if ProcessInfo.processInfo.environment["CTRL_DEMO"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.model.runDemo() }
@@ -299,17 +318,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = main
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        let glyph = Bundle.main.image(forResource: "menubar") ?? NSImage(systemSymbolName: "waveform", accessibilityDescription: "CTRL")
+        let glyph = Bundle.main.image(forResource: "menubar") ?? NSImage(systemSymbolName: "waveform", accessibilityDescription: "Butterfly")
         glyph?.isTemplate = true   // follows light/dark menu bar
         glyph?.size = .init(width: 18, height: 18)
         item.button?.image = glyph
         let menu = NSMenu()
         menu.addItem(withTitle: "Settings…", action: #selector(editRoutines), keyEquivalent: ",")
+        let tree = menu.addItem(withTitle: "Decision Tree", action: #selector(toggleDecisionTree), keyEquivalent: "d")
+        tree.keyEquivalentModifierMask = [.command, .option]
+        tree.isHidden = !UserDefaults.standard.bool(forKey: "developerMode")
+        decisionTreeItem = tree
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit CTRL", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.addItem(withTitle: "Quit Butterfly", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         for i in menu.items where i.action != #selector(NSApplication.terminate(_:)) { i.target = self }
         item.menu = menu
         statusItem = item
+        watchDeveloperMode()
+    }
+
+    private var decisionTreeItem: NSMenuItem?
+    private var developerObserver: NSObjectProtocol?
+
+    @objc private func toggleDecisionTree() { DecisionTreeWindow.shared.toggle() }
+
+    /// Developer mode on/off: show or hide the menu item (and close the window when it goes off).
+    private func watchDeveloperMode() {
+        // Fires for any defaults change, even mid-layout (AppKit registers defaults while SwiftUI draws Settings):
+        // act only when the toggle really flips, and after the current layout pass, or SwiftUI aborts.
+        var last = UserDefaults.standard.bool(forKey: "developerMode")
+        developerObserver = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: nil) { [weak self] _ in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    let on = UserDefaults.standard.bool(forKey: "developerMode")
+                    guard on != last else { return }
+                    last = on
+                    self?.decisionTreeItem?.isHidden = !on
+                    if !on { DecisionTreeWindow.shared.close() }
+                    else if !DecisionTreeWindow.shared.wasShown { DecisionTreeWindow.shared.show() }
+                }
+            }
+        }
+        if UserDefaults.standard.bool(forKey: "developerMode"), UserDefaults.standard.bool(forKey: "decisionTreeOpen") { DecisionTreeWindow.shared.show() }
     }
 
     @objc private func editRoutines() {

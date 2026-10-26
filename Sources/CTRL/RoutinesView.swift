@@ -30,7 +30,7 @@ struct RoutineEditor: View {
                 }
 
                 PondSection(title: "Steps", tint: Pond.teal,
-                            footer: "Each step is anything you'd say to CTRL: “open slack”, “play some music”, “switch to dark mode”.") {
+                            footer: "Each step is anything you'd say to Butterfly: “open slack”, “play some music”, “switch to dark mode”.") {
                     ForEach(Array(routine.steps.enumerated()), id: \.element.id) { i, step in
                         let binding = Binding(get: { routine.steps.first { $0.id == step.id }?.text ?? "" },
                                               set: { t in if let j = routine.steps.firstIndex(where: { $0.id == step.id }) { routine.steps[j].text = t } })

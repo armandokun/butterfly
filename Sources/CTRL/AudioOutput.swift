@@ -10,6 +10,28 @@ enum AudioOutput {
         AudioObjectPropertyAddress(mSelector: s, mScope: scope, mElement: kAudioObjectPropertyElementMain)
     }
 
+    /// Reading every device's streams/name/transport costs ~90 ms, so routing uses a cached list,
+    /// refreshed whenever macOS reports devices added or removed.
+    nonisolated(unsafe) private static var cache: [Device]?
+    nonisolated(unsafe) private static var watching = false
+    static var cachedDevices: [Device] {
+        if !watching {
+            watching = true
+            var a = address(kAudioHardwarePropertyDevices)
+            AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &a, DispatchQueue.global(qos: .utility)) { _, _ in
+                let fresh = AudioOutput.devices
+                DispatchQueue.main.async { cache = fresh }
+            }
+        }
+        if let cache { return cache }
+        let fresh = devices
+        cache = fresh
+        return fresh
+    }
+
+    /// Call at launch so the first command doesn't pay for the scan.
+    static func warm() { DispatchQueue.global(qos: .utility).async { let d = devices; DispatchQueue.main.async { if cache == nil { cache = d }; _ = cachedDevices } } }
+
     static var devices: [Device] {
         var a = address(kAudioHardwarePropertyDevices)
         var size: UInt32 = 0
@@ -69,7 +91,7 @@ enum AudioOutput {
 /// Microphones. "Automatic" = the system's input, except when the lid is closed and that's the
 /// built-in mic (it's off then): use a real external mic instead (Studio Display, USB, AirPods…).
 enum AudioInput {
-    struct Device: Identifiable, Hashable { let id: AudioObjectID; let uid: String; let name: String; let builtIn: Bool }
+    struct Device: Identifiable, Hashable { let id: AudioObjectID; let uid: String; let name: String; let builtIn: Bool; var bluetooth = false }
 
     private static func address(_ s: AudioObjectPropertySelector, _ scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) -> AudioObjectPropertyAddress {
         AudioObjectPropertyAddress(mSelector: s, mScope: scope, mElement: kAudioObjectPropertyElementMain)
@@ -93,7 +115,8 @@ enum AudioInput {
             AudioObjectGetPropertyData(id, &t, 0, nil, &ts, &transport)
             if transport == kAudioDeviceTransportTypeVirtual || transport == kAudioDeviceTransportTypeAggregate { return nil }
             guard let name = string(id, kAudioObjectPropertyName), let uid = string(id, kAudioDevicePropertyDeviceUID) else { return nil }
-            return Device(id: id, uid: uid, name: name, builtIn: transport == kAudioDeviceTransportTypeBuiltIn)
+            return Device(id: id, uid: uid, name: name, builtIn: transport == kAudioDeviceTransportTypeBuiltIn,
+                          bluetooth: transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE)
         }
     }
 
@@ -119,8 +142,13 @@ enum AudioInput {
     static var chosen: Device? {
         let list = devices
         if !preferredUID.isEmpty, let d = list.first(where: { $0.uid == preferredUID }) { return d }
+        let lid = lidClosed
+        let usable = list.filter { !($0.builtIn && lid) }
         let def = list.first { $0.id == systemDefault }
-        if let def, !(def.builtIn && lidClosed) { return def }
-        return list.first { !$0.builtIn } ?? def ?? list.first
+        // Never a Bluetooth mic when another works: turning on the AirPods mic flips them into call mode
+        // (muffled mono music, a stutter on every ⌥ press).
+        if let def, usable.contains(def), !def.bluetooth { return def }
+        if let wired = usable.first(where: { !$0.bluetooth && !$0.builtIn }) ?? usable.first(where: { !$0.bluetooth }) { return wired }
+        return def ?? usable.first ?? list.first
     }
 }

@@ -20,7 +20,11 @@ final class NotchModel: ObservableObject {
         case timerDone(String)       // expanded "Timer done" alert
         case badge(symbol: String, text: String, tint: Color)   // compact: icon left, short text right
         case answer(title: String, text: String)                // expanded, a few lines (screen summaries, agenda)
+        case agenda(day: Date, events: [AgendaItem], more: Int) // expanded, iOS Calendar widget style
+        case playlists(title: String, items: [PlaylistItem])    // expanded: artwork tiles to pick from
     }
+    struct AgendaItem: Equatable { let time: String; let title: String; let color: Color; let allDay: Bool }
+    struct PlaylistItem: Equatable { let name: String; let artwork: NSImage? }
 
     /// Background events (volume keys, battery, Wi-Fi…): only when the notch isn't busy with you.
     func ambient(_ p: Phase, for seconds: Double = 1.6) {
@@ -42,16 +46,7 @@ final class NotchModel: ObservableObject {
         }
         WiFi.shared.start()
         Bluetooth.shared.start()
-        Battery.shared.onEvent = { [weak self] b, event in
-            switch event {
-            case .low: self?.ambient(.badge(symbol: "battery.25percent", text: "\(b.percent)% left", tint: .orange), for: 3.5)
-            case .plugged, .unplugged, .full: break
-            case .critical:
-                NSSound(named: "Funk")?.play()
-                self?.ambient(.badge(symbol: "battery.0percent", text: "\(b.percent)% · plug in", tint: .red), for: 5)
-            }
-        }
-        Battery.shared.start()
+        // Battery: only when you ask ("how much battery"), no automatic low-battery popups.
         Connectivity.shared.start()
         Agenda.shared.onSoon = { [weak self] e, minutes in
             NSSound(named: "Tink")?.play()
@@ -112,10 +107,12 @@ final class NotchModel: ObservableObject {
             switch t { case .app(let a): a.name; case .site(let u): u.host() ?? u.absoluteString } }.joined(separator: ", ")
         case .media(_, let title, let detail), .system(_, let title, let detail): did = title + (detail.map { " · \($0)" } ?? "")
         case .message(let m): did = m
-        case .level(let k, let v): did = "\(k == .volume ? "volume" : "brightness") set to \(v)%"
+        case .level(let k, let v): did = "\(k.label.lowercased()) set to \(v)%"
         case .nowPlaying: did = NowPlaying.shared.track.map { "now playing: \($0.title)" + ($0.artist.map { " by \($0)" } ?? "") + ($0.playing ? "" : " (paused)") } ?? "music"
         case .timerDone(let l): did = "\(l) finished"
         case .answer(let title, let text): did = "\(title): \(text.prefix(120))"
+        case .agenda(_, let events, _): did = "showed the agenda: " + events.map { "\($0.time) \($0.title)" }.joined(separator: ", ")
+        case .playlists(_, let items): did = "offered playlists: " + items.map(\.name).joined(separator: ", ")
         case .badge(_, let text, _): did = text
             if case .focus(let m) = outcome { did = m == "off" ? "Focus turned off" : "\(m) Focus turned on" }
             if case .bluetooth(let n, _, let c) = outcome { did = "\(n) \(c ? "connected" : "disconnected") (\(text))" }
@@ -151,6 +148,7 @@ final class NotchModel: ObservableObject {
         recorder.onSegment = { [weak self] text in self?.enqueue(text) }
         recorder.onLevel = { [weak self] level in
             guard let self else { return }
+            if self.firstLevel { self.firstLevel = false; Self.lap("first audio level") }
             self.peakLevel = max(self.peakLevel, CGFloat(level))
             self.levels.removeFirst()
             self.levels.append(CGFloat(level))
@@ -158,6 +156,7 @@ final class NotchModel: ObservableObject {
     }
 
     func prepare() async {
+        recorder.watchDevices()
         try? await recorder.prepare()
     }
 
@@ -178,6 +177,59 @@ final class NotchModel: ObservableObject {
             _ = try? await results.value
         }
     }
+    /// CTRL_GALLERY=1: steps through every notch design, writing each name to /tmp/butterfly-gallery/state for capture.
+    func runGallery() {
+        moveToActiveScreen()
+        let safari = AppCatalog.shared.app(named: "Safari"), slack = AppCatalog.shared.app(named: "Slack"), music = AppCatalog.shared.app(named: "Music")
+        let dir = URL(fileURLWithPath: "/tmp/butterfly-gallery"); try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        func mark(_ s: String) { try? s.write(to: dir.appending(path: "state"), atomically: true, encoding: .utf8) }
+        Task {
+            let wave = Task { while !Task.isCancelled { levels.removeFirst(); levels.append(.random(in: 0.2...1)); try? await Task.sleep(for: .milliseconds(110)) } }
+            var steps: [(String, () -> Void)] = [
+                ("01-listening", { self.transcript = ""; self.phase = .listening }),
+                ("02-transcript", { self.transcript = "open slack and safari side by side"; self.phase = .listening }),
+                ("03-transcript-long", { self.transcript = "put my browser and discord side by side on the big screen please"; self.phase = .listening }),
+                ("04-locked", { self.isLocked = true; self.transcript = ""; self.phase = .listening }),
+                ("05-dictation", { self.isLocked = false; self.dictationOnly = true; self.transcript = ""; self.phase = .listening }),
+                ("06-thinking", { self.dictationOnly = false; self.transcript = "what's on my calendar today"; self.phase = .thinking }),
+                ("08-media", { self.phase = .media(music, title: "Ambient Deep Focus Music", detail: "Playlist") }),
+                ("09-system", { self.phase = .system(symbol: "moon.fill", title: "Dark mode on", detail: nil) }),
+                ("10-system-working", { self.phase = .system(symbol: "magnifyingglass", title: "Searching…", detail: "Google") }),
+                ("11-unsure", { self.phase = .unsure(slack) }),
+                ("12-message", { self.phase = .message("Allow Screen Recording for Butterfly") }),
+                ("13-volume", { self.phase = .level(.volume, 60) }),
+                ("14-brightness", { self.phase = .level(.brightness, 40) }),
+                ("15-offline", { self.phase = .system(symbol: "wifi.slash", title: "No internet", detail: "Couldn’t process that request. Check your connection.") }),
+                ("16-agenda", { self.phase = .agenda(day: Date(), events: [
+                    .init(time: "All day", title: "Aiša atvažiuoja pas mus", color: .red, allDay: true),
+                    .init(time: "All day", title: "Pasikeisti kapas", color: .red, allDay: true),
+                    .init(time: "11:00", title: "Team Sync", color: .orange, allDay: false),
+                    .init(time: "13:00", title: "Lunch with Ana", color: .green, allDay: false),
+                    .init(time: "16:30", title: "Design review", color: .blue, allDay: false)], more: 2) }),
+                ("16b-answer", { self.phase = .answer(title: "Screen summary", text: "A Slack thread about the launch: Ana wants the copy finalised by Friday and asks who owns the pricing page.") }),
+                ("17-playlists", {
+                    let names = MediaController.ownPlaylists().prefix(4)
+                    self.phase = .playlists(title: "No “focus” playlist", items: MediaController.artwork(for: Array(names)).map { PlaylistItem(name: $0.0, artwork: $0.1) })
+                }),
+                ("18-timer-done", { self.phase = .timerDone("5 minute timer") }),
+                ("_play", { _ = MediaController.play(playlist: MediaController.ownPlaylists().first ?? "Library") }),
+                ("19b-now-playing", { self.phase = .nowPlaying }),
+            ]
+            if let safari, let slack { steps.insert(("07-opened", { self.phase = .opened([.app(safari), .app(slack)], detail: "side by side") }), at: 6) }
+            if let only = ProcessInfo.processInfo.environment["CTRL_GALLERY_ONLY"] { steps = steps.filter { $0.0.contains(only) } }
+            for (name, apply) in steps {
+                withAnimation(.smooth) { apply() }
+                try? await Task.sleep(for: .milliseconds(name == "_play" ? 2500 : 1100))
+                if !name.hasPrefix("_") { mark(name) }
+                try? await Task.sleep(for: .milliseconds(700))
+            }
+            wave.cancel()
+            _ = await MediaController.perform(.pause, preferred: nil, query: nil)
+            mark("done")
+            close()
+        }
+    }
+
     func runDemo() {
         moveToActiveScreen()
         Task {
@@ -188,11 +240,13 @@ final class NotchModel: ObservableObject {
                 levels.removeFirst(); levels.append(.random(in: 0.2...1))
                 try? await Task.sleep(for: .milliseconds(120))
             }
-            for t in ["open", "open sla", "open slack"] {
-                transcript = t
-                for _ in 0..<6 {
+            let sentence = "put my browser and discord side by side on the big screen please"
+            let words = sentence.split(separator: " ")
+            for n in 1...words.count {
+                transcript = words.prefix(n).joined(separator: " ")
+                for _ in 0..<3 {
                     levels.removeFirst(); levels.append(.random(in: 0.2...1))
-                    try? await Task.sleep(for: .milliseconds(120))
+                    try? await Task.sleep(for: .milliseconds(110))
                 }
             }
             phase = .thinking
@@ -211,23 +265,37 @@ final class NotchModel: ObservableObject {
     @Published private(set) var dictationOnly = false
 
     func begin(dictation: Bool = false) {
+        if Date().timeIntervalSince(Self.armedAt) > 0.5 { Self.t0 = Date() } else { Self.t0 = Self.armedAt }
+        firstLevel = true
+        defer { Self.lap("begin() returned") }
         dictationOnly = dictation
         dismissTask?.cancel()
         moveToActiveScreen()
         transcript = ""
         levels = levels.map { _ in 0 }
         phase = .listening
+        Cues.listening()
+        Ducker.duck()
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
         if dictation {
             frontApp = NSWorkspace.shared.frontmostApplication.flatMap { $0.bundleIdentifier == Bundle.main.bundleIdentifier ? nil : $0 }
-        } else {
-            Task { self.readFrontApp() }   // after the notch appears
         }
         startTask = Task {
-            do { try await recorder.start() }
+            do {
+                Self.lap("recorder start")
+                // The mic starts off the main thread (~0.4 s): read the front app's menus/buttons meanwhile.
+                if !dictation { Task { self.readFrontApp(); Self.lap("readFrontApp done") } }
+                try await recorder.start(onAudio: { Self.lap("mic live") })
+                Self.lap("analyzer started")
+            }
             catch { show(.message("Mic error: \(error.localizedDescription)")) }
         }
     }
+
+    private var firstLevel = true
+    private var lastFinalizeMs: Int?
+    static var t0 = Date()
+    static func lap(_ s: String) { if ProcessInfo.processInfo.environment["CTRL_TIMING"] == "1" { print(String(format: "%5.0f ms  %@", Date().timeIntervalSince(t0) * 1000, s)); fflush(stdout) } }
 
     // MARK: Multiple displays
 
@@ -279,6 +347,8 @@ final class NotchModel: ObservableObject {
         isLocked = false
         dictating = false
         dictationOnly = false
+        Cues.stopped()
+        Ducker.restore()
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
         Task {
             await startTask?.value
@@ -357,9 +427,13 @@ final class NotchModel: ObservableObject {
 
     func end() {
         guard phase == .listening, !isLocked else { return }
+        Cues.stopped()
+        Ducker.restore()   // on release, before the command runs ("volume up" starts from your real level)
+        let released = Date()
         Task {
             await startTask?.value
             let text = await recorder.stop()
+            lastFinalizeMs = Int(Date().timeIntervalSince(released) * 1000)
             let silent = peakLevel < 0.02
             peakLevel = 0
             guard !text.isEmpty else {
@@ -390,17 +464,72 @@ final class NotchModel: ObservableObject {
         Task {
             await startTask?.value
             await recorder.cancel()
+            Ducker.restore()
             close()
         }
     }
 
     // MARK: Routing
 
+    /// Short label for the debug tree: the enum case and its main values.
+    private static func describe(_ v: Any) -> String {
+        var s = String(describing: v)
+        for noise in ["CTRL.", "Butterfly.", "Optional(", "InstalledApp(name: "] { s = s.replacingOccurrences(of: noise, with: "") }
+        s = s.replacingOccurrences(of: #", url: file://[^)]*\)"#, with: "", options: .regularExpression)
+        s = s.replacingOccurrences(of: #"<[^>]*>"#, with: "…", options: .regularExpression)
+        return s.count > 180 ? String(s.prefix(180)) + "…" : s
+    }
+
+    /// CTRL_SAY="a|b|c": runs each as if spoken (debug, for the decision tree).
+    /// CTRL_PTT=1: simulate holding ⌥ for 2 s, five times (timing test).
+    /// ⌥ went down: start the mic during the hold delay; cancelled if it was a shortcut.
+    func arm() {
+        Self.armedAt = Date()
+        recorder.arm()
+        TypeSafeClient.preconnect()
+    }
+    static var armedAt = Date.distantPast
+    func disarm() { recorder.disarm() }
+
+    func pttTest() {
+        Task { for _ in 0..<5 { arm(); try? await Task.sleep(for: .milliseconds(100)); begin(); Self.lap("notch shown (key down + hold delay)"); try? await Task.sleep(for: .seconds(1.5)); let r0 = Date(); _ = await recorder.stop(); print(String(format: "stop (finalize) %.0f ms", Date().timeIntervalSince(r0) * 1000)); fflush(stdout); phase = .idle; try? await Task.sleep(for: .seconds(1)) } ; exit(0) }
+    }
+
+    /// CTRL_SPEAK="a|b": holds ⌥ while macOS `say` speaks each line into the mic, then releases (end-to-end timing).
+    func speakTest(_ lines: [String]) {
+        Task {
+            for l in lines {
+                arm(); try? await Task.sleep(for: .milliseconds(100)); begin()
+                try? await Task.sleep(for: .milliseconds(500))
+                let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/say"); p.arguments = ["-v", "Samantha", l]
+                try? p.run(); while p.isRunning { try? await Task.sleep(for: .milliseconds(50)) }
+                try? await Task.sleep(for: .milliseconds(300))
+                print("released, live: \(transcript)"); fflush(stdout)
+                end()
+                try? await Task.sleep(for: .seconds(4))
+            }
+            exit(0)
+        }
+    }
+
+    func say(_ lines: [String]) {
+        Task { for l in lines { await handle(l); try? await Task.sleep(for: .seconds(2.5)) } }
+    }
+
     private func handle(_ text: String) async {
+        let trace = DecisionTrace.shared
+        trace.begin(text)
+        trace.add(.heard, "“\(text)”" + (lastFinalizeMs.map { _ in "" } ?? ""), [isLocked ? "locked mode" : nil, dictating ? "dictating" : nil].compactMap { $0 }.joined(separator: " · ").nilIfEmpty)
+        trace.add(.context, frontApp?.localizedName ?? "no front app",
+                  "\(menuSnapshot?.items.count ?? 0) menu items · \(clickables.count) clickable elements" + (cursorSnapshot.map { " · Cursor: \($0.chats.count) chats" } ?? ""))
+        if let ms = lastFinalizeMs { trace.add(.context, "Speech finalized after release", nil, ms: ms); lastFinalizeMs = nil }
+        defer { trace.end() }
         // Just offered playlists: saying one of them (or "the first one") plays it.
         if let (names, at) = pendingPlaylists, Date().timeIntervalSince(at) < 30 {
             pendingPlaylists = nil
             if let name = Self.pick(text, from: names), let r = MediaController.play(playlist: name) {
+                trace.add(.rule, "playlist follow-up", "picked “\(name)” from the offered list (no model call)")
+                trace.add(.outcome, "play playlist", name)
                 try? await Task.sleep(for: .milliseconds(250))
                 if NowPlaying.shared.track != nil { show(.nowPlaying, for: 2.6) }
                 else { show(.media(r.player, title: r.title, detail: r.detail), for: 2.2) }
@@ -408,6 +537,7 @@ final class NotchModel: ObservableObject {
             }
         }
         guard let key = Keychain.apiKey else {
+            trace.add(.rule, "no API key", "local fallbacks only")
             // No key yet: simple fallbacks so the app still works.
             if let app = AppCatalog.shared.localMatch(text) { return launch(app) }
             let site = Vocabulary.matches(in: text).first { $0.contains(".") } ?? URLExtractor.candidates(in: text).first
@@ -417,9 +547,11 @@ final class NotchModel: ObservableObject {
         do {
             let router = CommandRouter(client: TypeSafeClient(apiKey: key))
             let previous = Date().timeIntervalSince(lastCommandAt) < 120 ? lastCommand : nil
+            let routed = Date()
             var outcome = try await router.route(text, menu: menuSnapshot, front: frontApp, elements: clickables,
                                                  previous: previous, dictating: dictating, cursor: cursorSnapshot)
             if case .repeatLast = outcome, let previous {
+                trace.add(.rule, "repeat", "re-running “\(previous)” in the current context")
                 // Same words, fresh context: "close this tab" → "this one too" closes the new current tab.
                 outcome = try await router.route(previous, menu: menuSnapshot, front: frontApp, elements: clickables)
             } else {
@@ -438,13 +570,17 @@ final class NotchModel: ObservableObject {
             case .notACommand: break
             default: dictating = false
             }
+            trace.add(.outcome, Self.describe(outcome), nil, ms: Int(Date().timeIntervalSince(routed) * 1000))
             if case .routine(let r) = outcome { return await run(r, router: router) }
             lastActionDisplay = nil
+            let ran = Date()
             await perform(outcome)
+            trace.add(.result, Self.describe(phase), nil, ms: Int(Date().timeIntervalSince(ran) * 1000))
             remember(text, outcome)
         } catch {
+            trace.add(.error, error.localizedDescription, Connectivity.shared.explains(error) ? "offline" : nil)
             if let app = AppCatalog.shared.localMatch(text) { return launch(app) }
-            if Connectivity.shared.explains(error) { return show(.badge(symbol: "wifi.slash", text: "No internet", tint: .orange), for: 2.5) }
+            if Connectivity.shared.explains(error) { return show(.system(symbol: "wifi.slash", title: "No internet", detail: "Couldn’t process that request. Check your connection."), for: 3) }
             show(.message(error.localizedDescription))
         }
     }
@@ -490,8 +626,11 @@ final class NotchModel: ObservableObject {
             case .screen(let action, let request): await screen(action, request: request)
             case .agent(let request): await agent(request)
             case .webSearch(let url, let query, let engine):
-                NSWorkspace.shared.open(url)
+                BrowserTab.open(url)
                 show(.system(symbol: "magnifyingglass", title: query, detail: "Searching \(engine)"), for: 1.6)
+            case .askBrowser(let question):
+                let browser = await BrowserTab.ask(question)
+                show(.media(browser, title: question, detail: "Asking \(browser?.name ?? "the browser")"), for: 1.8)
             case .press(let combo):
                 await KeyPress.perform(combo, in: frontApp)
                 show(.system(symbol: "keyboard", title: combo.label + (combo.times > 1 ? " ×\(combo.times)" : ""), detail: nil), for: 0.9)
@@ -573,7 +712,7 @@ final class NotchModel: ObservableObject {
                 } catch {
                     let denied = !CGPreflightScreenCaptureAccess()
                     if denied { CGRequestScreenCaptureAccess() }
-                    show(.message(denied ? "Allow Screen Recording for CTRL" : error.localizedDescription), for: 2.5)
+                    show(.message(denied ? "Allow Screen Recording for Butterfly" : error.localizedDescription), for: 2.5)
                 }
             case .window(let action, let app):
                 let r = await WindowCommands.perform(action, app: app)
@@ -637,7 +776,8 @@ final class NotchModel: ObservableObject {
                 let result = await MediaController.perform(action, preferred: preferred, query: query)
                 if !result.suggestions.isEmpty {
                     pendingPlaylists = (result.suggestions, Date())
-                    show(.answer(title: result.title, text: "Say one: " + result.suggestions.joined(separator: " · ")), for: 8)
+                    let items = MediaController.artwork(for: result.suggestions).map { PlaylistItem(name: $0.0, artwork: $0.1) }
+                    show(.playlists(title: result.title, items: items), for: 10)
                     break
                 }
                 try? await Task.sleep(for: .milliseconds(250))   // let the now-playing stream catch up
@@ -743,9 +883,8 @@ final class NotchModel: ObservableObject {
         let agenda = Agenda.shared
         guard await agenda.requestAccess() else {
             NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars")!)
-            return show(.message("Allow Calendar access for CTRL"), for: 3)
+            return show(.message("Allow Calendar access for Butterfly"), for: 3)
         }
-        func line(_ e: EKEvent) -> String { "\(e.isAllDay ? "All day" : e.startDate.formatted(date: .omitted, time: .shortened))  \(e.title ?? "Event")" }
         switch action {
         case .next:
             // Timed events first; an all-day one only when nothing else is coming.
@@ -756,8 +895,14 @@ final class NotchModel: ObservableObject {
             let list = agenda.day(action == .today ? 0 : 1)
             let day = action == .today ? "today" : "tomorrow"
             guard !list.isEmpty else { return show(.system(symbol: "calendar", title: "Free \(day)", detail: action == .today ? "Nothing left on your calendar" : "No events"), for: 2) }
-            let title = "\(list.count) event\(list.count == 1 ? "" : "s") \(action == .today ? "left today" : day)"
-            show(.answer(title: title, text: list.prefix(5).map(line).joined(separator: "\n") + (list.count > 5 ? "\n+\(list.count - 5) more" : "")), for: 6)
+            let items = list.map { e in
+                AgendaItem(time: e.isAllDay ? "All day" : e.startDate.formatted(date: .omitted, time: .shortened),
+                           title: e.title ?? "Event", color: Color(nsColor: e.calendar?.color ?? .systemRed), allDay: e.isAllDay)
+            }
+            let allDay = items.filter(\.allDay), timed = items.filter { !$0.allDay }
+            let shown = allDay.prefix(2) + timed.prefix(4)
+            let date = Calendar.current.date(byAdding: .day, value: action == .today ? 0 : 1, to: Date())!
+            show(.agenda(day: date, events: Array(shown), more: items.count - shown.count), for: 7)
         case .join:
             // The meeting happening now, or the next one starting within 15 minutes.
             let soon = agenda.events(from: Date(), to: Date().addingTimeInterval(15 * 60)).first { Agenda.meetingURL($0) != nil }
@@ -824,7 +969,7 @@ final class NotchModel: ObservableObject {
         guard let (text, selected) = await ScreenReader.text(of: app) else {
             let denied = !CGPreflightScreenCaptureAccess()
             if denied { CGRequestScreenCaptureAccess() }
-            return show(.message(denied ? "Allow Screen Recording for CTRL" : "Nothing to read"), for: 2.5)
+            return show(.message(denied ? "Allow Screen Recording for Butterfly" : "Nothing to read"), for: 2.5)
         }
         if action == .readAloud {
             ScreenReader.speak(text)

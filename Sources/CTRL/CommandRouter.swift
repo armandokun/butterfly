@@ -34,11 +34,48 @@ struct CommandRouter {
         case clipboardList
         case agent(String)                       // second layer: the on-device LLM plans and does it
         case webSearch(URL, query: String, engine: String)
+        case askBrowser(String)                  // a question: typed into a new tab of the browser (Dia answers it)
         case press(KeyPress.Combo)
         case cursor(CursorControl.Action, chat: CursorControl.Chat?, project: String?, message: String)
         case unsure(best: InstalledApp?)
         case needAddress
         case notACommand
+    }
+
+    /// Decision-tree node for the model call: intent first (with runners-up), then every other answer.
+    @MainActor
+    private static func trace(_ r: TypeSafeClient.Response, questions: Int, checks: [String: String], state: [String: String], ms: Int) {
+        typealias N = DecisionTrace.Node
+        func ranked(_ a: TypeSafeClient.ChoiceAnswer, _ n: Int) -> [N] {
+            a.probabilities.sorted { $0.value > $1.value }.prefix(n).map { N(kind: .model, title: $0.key, p: $0.value) }
+        }
+        var kids: [N] = [], other: [N] = []
+        let intent = r.choice("intent")?.choice ?? ""
+        if let i = r.choice("intent") { kids.append(N(kind: .model, title: "intent: \(i.choice)", p: i.confidence, children: ranked(i, 4))) }
+        // Answers that belong to the chosen intent's branch; everything else was asked speculatively.
+        let branch: [String: [String]] = [
+            "open": ["target1", "windows", "layout"], "window": ["window_action", "layout", "target1"], "system": ["system_action", "level"],
+            "settings": ["settings_page", "settings_action", "settings_theme"], "timer": ["timer_action", "timer_duration"],
+            "focus": ["focus_mode"], "connect": ["connect_target", "connect_on"], "audio_output": ["audio_target"],
+            "clipboard": ["clip_item", "clip_list"], "click": ["click_target"], "calendar": ["calendar_action"],
+            "files": ["files_action", "folder"], "navigate": ["nav_action"], "edit": ["edit_action"], "screen": ["screen_action"],
+            "type": ["type_start"], "cursor": ["cursor_action", "cursor_chat", "cursor_project"],
+        ]
+        let relevant = Set(branch[intent] ?? []).union(["routine", "menu_item"])
+        for (k, a) in r.answers.sorted(by: { $0.key < $1.key }) where k != "intent" {
+            if let c = a.choice {
+                let n = N(kind: .model, title: "\(k): \(c.choice)", p: c.confidence, children: ranked(c, 3))
+                if relevant.contains(k) || k.hasPrefix(intent), !(k == "routine" && c.choice == "none") { kids.append(n) } else { other.append(n) }
+            } else if let v = a.noul?.noul, let item = checks[k] {
+                kids.append(N(kind: .model, title: "wants \(item)?", p: v))
+            } else if let v = a.noul?.noul {
+                let n = N(kind: .model, title: "\(k)?", p: v)
+                if relevant.contains(k) { kids.append(n) } else { other.append(n) }
+            }
+        }
+        if !other.isEmpty { kids.append(N(kind: .model, title: "\(other.count) other answers (asked in parallel, unused)", children: other)) }
+        let ctx = ["previous_command", "recent_actions", "mode", "web_addresses_detected"].compactMap { k in state[k].map { "\(k): \($0.prefix(80))" } }
+        DecisionTrace.shared.add(N(kind: .model, title: "Model answered \(questions) questions", detail: ctx.isEmpty ? nil : ctx.joined(separator: " · "), ms: ms, children: kids))
     }
 
     static let appThreshold = 0.6     // first app: below this, ask "did you mean…?"
@@ -54,12 +91,12 @@ struct CommandRouter {
     @MainActor
     func route(_ transcript: String, menu: MenuReader.Snapshot? = nil, front: NSRunningApplication? = nil, elements: [Clicker.Element] = [],
                previous: String? = nil, dictating: Bool = false, cursor: CursorControl.Snapshot? = nil) async throws -> Outcome {
+        let routeStart = Date()
         let catalog = AppCatalog.shared
         let transcript = catalog.resolvingGenericNames(transcript)
         // Spotlight runs while Jev decides; only used if the answer is "find a file".
         let fileSearch = Task.detached { await Files.search(transcript) }
         defer { fileSearch.cancel() }
-
         let normalized = URLExtractor.normalize(transcript)
         let regexHits = URLExtractor.candidates(in: transcript)
         // Your vocabulary wins over raw regex hits ("mail.sh" when you said "openmail.sh")…
@@ -75,7 +112,6 @@ struct CommandRouter {
             sites.append(s)
         }
         sites = Array(sites.prefix(40))
-
         // One option list for every slot: apps and websites side by side. Keys are prefixed so they can't collide.
         let apps = catalog.candidates(for: transcript, limit: 254 - sites.count)
         var options: [String: String] = [:]
@@ -87,6 +123,7 @@ struct CommandRouter {
             "intent": .choice("What does the user want the computer to do?", options: [
                 "open": "open, launch, show, put, place, or arrange applications and/or websites on screen (domains with any ending such as .com, .sh, .ai, .io); also switch to / go to / bring up a named app ('switch to Discord')",
                 "search": "search the web, Google, YouTube, Amazon, Maps, or Wikipedia for something ('search google for flights to paris', 'google best pizza near me', 'look up the weather in Rome', 'find cat videos on youtube')",
+                "question": "ask a general question that wants an answer or explanation: facts, how-to, definitions, advice, comparisons, maths, news, weather ('what's the capital of Peru', 'how do I boil an egg', 'why is the sky blue', 'how far is the moon'). Not about what's on screen, not the calendar, battery, timer or the song playing, and not an explicit 'search/google X'",
                 "keys": "press a specific keyboard key or shortcut by name: escape, enter, tab, space, arrow keys, delete, F5, or a combination like command shift T, control C ('press escape', 'hit enter', 'press command K')",
                 "play_music": "play, start, resume, or put on music, a song, or a podcast",
                 "pause_music": "pause, stop, or silence the music or whatever is playing",
@@ -97,7 +134,7 @@ struct CommandRouter {
                 "focus": "turn a Focus mode on or off (not Stage Manager): Do Not Disturb, Work, Sleep, Personal, Gaming… ('don't disturb me', 'focus mode', 'turn off do not disturb')",
                 "connect": "connect or disconnect a specific Bluetooth device (AirPods, headphones, speaker, keyboard, controller) or join a specific Wi-Fi network by name",
                 "settings": "open a specific System Settings page, check or change a Mac setting (menu bar always shown or auto-hidden, Dock auto-hide, Stage Manager, battery percentage in the menu bar, Night Shift, Bluetooth on/off, desktop icons, hidden files, Wi-Fi, Bluetooth, dark mode, battery settings, storage, display settings, notifications, privacy, keyboard, updates, etc.)",
-                "system": "change the volume (louder, quieter, mute, unmute) or screen brightness, lock the screen, put the Mac to sleep, turn the display off, take a screenshot, empty the Trash, or ask how much battery is left / whether it's charging",
+                "system": "change the volume (louder, quieter, mute, unmute), screen brightness, or the keyboard backlight (keyboard light on/off, brighter, dimmer, a level), lock the screen, put the Mac to sleep, turn the display off, take a screenshot, empty the Trash, or ask how much battery is left / whether it's charging",
                 "window": "move, snap, resize, center, maximize, minimize, close, or full-screen the current window (or a named app's window), send it to another screen, or hide or quit an app that's already open, or hide all other apps",
                 "click": "click, press, tap, or select something visible on screen: a button, link, tab, field, message, item, desktop widget, Dock icon, or menu bar icon (e.g. 'click send', 'press the blue button', 'click the first result', 'click the weather widget')",
                 "files": "open a folder (Downloads, Desktop, Documents, iCloud), open the latest download or screenshot, or find / open a specific file or document on the Mac. 'Open the Desktop folder' means the Desktop folder; 'show desktop' / 'show me the desktop' means hide every window (navigate)",
@@ -145,7 +182,7 @@ struct CommandRouter {
             "screen_action": ScreenReader.actionQuestion,
         ]
         if let q = RoutineStore.shared.question { questions["routine"] = q }
-        let outputs = AudioOutput.devices
+        let outputs = AudioOutput.cachedDevices
         let audioPaired = Bluetooth.shared.paired.filter { d in
             !d.connected && ["airpods", "headphones", "hifispeaker"].contains { d.symbol.hasPrefix($0) } && !outputs.contains { $0.name == d.name }
         }
@@ -257,7 +294,11 @@ struct CommandRouter {
         if !sites.isEmpty { state["web_addresses_detected"] = sites.joined(separator: ", ") }
         if !known.isEmpty { state["users_known_sites"] = known.joined(separator: ", ") }
 
+        let asked = Date()
+        if ProcessInfo.processInfo.environment["CTRL_TIMING"] == "1" { print(String(format: "  build questions %.0f ms", asked.timeIntervalSince(routeStart) * 1000)) }
         let response = try await client.systemOne(state: state, questions: questions)
+        Self.trace(response, questions: questions.count, checks: checks, state: state, ms: Int(Date().timeIntervalSince(asked) * 1000))
+        if ProcessInfo.processInfo.environment["CTRL_TIMING"] == "1" { print(String(format: "  model call %.0f ms", Date().timeIntervalSince(asked) * 1000)) }
 
         if ProcessInfo.processInfo.environment["CTRL_DEBUG"] == "1" {
             for k in ["intent", "routine", "target1", "windows", "layout", "settings_page", "settings_action", "menu_item", "system_action", "timer_action", "timer_duration", "focus_mode", "connect_target", "window_action", "click_target", "calendar_action", "quick_setting", "audio_target", "clip_item", "nav_action", "edit_action", "screen_action", "files_action", "folder", "level"] {
@@ -273,9 +314,13 @@ struct CommandRouter {
         if intent == "window", response.choice("layout").map({ $0.choice != "none" }) == true,
            checks.filter({ (response.noul($0.key) ?? 0) >= Self.extraThreshold }).count >= 2 {
             intent = "open"
+            DecisionTrace.shared.add(.rule, "window → open", "2+ apps/sites with a layout means arranging them")
         }
         // "Type …" / "Dictate …" at the start is always typing, however long the text is.
-        if Typer.startsWithTrigger(transcript) { intent = "type" }
+        if Typer.startsWithTrigger(transcript), intent != "type" {
+            intent = "type"
+            DecisionTrace.shared.add(.rule, "→ type", "starts with “type” / “dictate”")
+        }
         if intent == "repeat" { return previous == nil ? .notACommand : .repeatLast }
         if intent == "continue_typing" {
             let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -283,6 +328,7 @@ struct CommandRouter {
         }
         // Routines first: your own phrases beat generic intents.
         if let r = response.choice("routine"), r.choice != "none", r.confidence >= 0.6, let routine = RoutineStore.shared.routine(named: r.choice) {
+            DecisionTrace.shared.add(.rule, "routine “\(r.choice)”", "routines beat intents (confidence ≥ 0.6)")
             return .routine(routine)
         }
         if intent == "undo" { return .undo }
@@ -319,6 +365,10 @@ struct CommandRouter {
             let project = response.choice("cursor_project").flatMap { $0.choice.hasPrefix("p:") ? String($0.choice.dropFirst(2)) : nil }
                 ?? CursorControl.projectNamed(in: transcript, snapshot: cursor)
             return .cursor(action, chat: chat, project: project, message: CursorControl.message(from: transcript))
+        }
+        if intent == "question" {
+            let q = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+            return q.isEmpty ? .notACommand : .askBrowser(q.prefix(1).uppercased() + q.dropFirst())
         }
         if intent == "search" || (intent == "open" && Self.looksLikeSearch(transcript)), let s = WebSearch.parse(transcript) {
             return .webSearch(s.url, query: s.query, engine: s.engine)
@@ -560,3 +610,4 @@ struct CommandRouter {
         return spoken.distance(from: spoken.startIndex, to: r.lowerBound)
     }
 }
+

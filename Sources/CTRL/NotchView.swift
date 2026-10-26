@@ -26,6 +26,15 @@ struct NotchView: View {
         if case .answer(let t, let x) = model.phase { return (t, x) }
         return nil
     }
+    /// Calendar widget / playlist tiles: bigger cards with their own height.
+    private var cardHeight: CGFloat? {
+        switch model.phase {
+        case .agenda(_, let ev, let more):
+            AgendaCard.height(allDay: ev.filter(\.allDay).count, timed: ev.filter { !$0.allDay }.count, more: more)
+        case .playlists: 168
+        default: nil
+        }
+    }
     /// Answer card height: grows with the text, up to ~6 lines.
     private var answerHeight: CGFloat {
         guard let a = answer else { return 0 }
@@ -44,6 +53,8 @@ struct NotchView: View {
         switch (presentation, island) {
         case (.closed, false): closed
         case (.compact, false): .init(width: closed.width + compactExtra, height: closed.height)
+        case (.expanded, false) where cardHeight != nil: .init(width: max(closed.width + 300, 520), height: closed.height + cardHeight! + 10)
+        case (.expanded, true) where cardHeight != nil: .init(width: 500, height: cardHeight! + 26)
         case (.expanded, false) where answer != nil: .init(width: max(closed.width + 300, 520), height: closed.height + answerHeight + 14)
         case (.expanded, true) where answer != nil: .init(width: 500, height: answerHeight + 30)
         case (.expanded, false): isPlayer ? .init(width: closed.width + 200, height: closed.height + 96)
@@ -82,9 +93,11 @@ struct NotchView: View {
                         Group {
                             if isPlayer, let t = music.track { PlayerCard(track: t) }
                             else if let a = answer { AnswerCard(title: a.title, text: a.text) }
+                            else if case .agenda(let day, let ev, let more) = model.phase { AgendaCard(day: day, events: ev, more: more) }
+                            else if case .playlists(let t, let items) = model.phase { PlaylistCard(title: t, items: items) }
                             else { content }
                         }
-                        .padding(.top, island ? (isPlayer || answer != nil ? 14 : 0) : closed.height + (isPlayer ? 8 : answer != nil ? 4 : 0))
+                        .padding(.top, island ? (isPlayer || answer != nil || cardHeight != nil ? 14 : 0) : closed.height + (isPlayer ? 8 : answer != nil || cardHeight != nil ? 4 : 0))
                         .padding(.horizontal, island ? 22 : 30)
                         .padding(.bottom, isPlayer ? 16 : 0)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -95,7 +108,8 @@ struct NotchView: View {
                 .mask { shape.padding(.horizontal, island ? 0 : 4).padding(.bottom, 2) }
             }
             .frame(width: size.width, height: size.height)
-            .opacity(presentation != .closed || !island ? 1 : 0)
+            // Idle: nothing drawn. The hardware notch hides it anyway, but screenshots and other screens showed a black bar.
+            .opacity(presentation != .closed ? 1 : 0)
             .scaleEffect(presentation == .closed && island ? 0.6 : 1, anchor: .top)
             .offset(y: island ? 4 : 0)
             Spacer(minLength: 0)
@@ -169,18 +183,23 @@ struct NotchView: View {
         HStack(spacing: 12) {
             leading.frame(minWidth: 28, maxHeight: 28).fixedSize(horizontal: true, vertical: false)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .modifier(Shimmer(active: isWorking))
+                if model.phase == .listening, !model.transcript.isEmpty {
+                    LiveTranscript(text: model.transcript)
+                } else {
+                    Text(title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .modifier(Shimmer(active: isWorking))
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                }
                 if let subtitle {
                     Text(subtitle)
                         .font(.system(size: 11))
                         .foregroundStyle(.white.opacity(0.5))
+                        .lineLimit(1)
                 }
             }
-            .lineLimit(1)
-            .truncationMode(.head)
             .contentTransition(.opacity)
             Spacer(minLength: 8)
             trailing
@@ -199,7 +218,7 @@ struct NotchView: View {
                 PulsingDot()
             }
         case .thinking:
-            ProgressView().controlSize(.small).tint(.white)
+            OrbitSparkles()
         case .opened(let targets, _):
             HStack(spacing: -6) {
                 ForEach(targets, id: \.self) { target in
@@ -212,13 +231,13 @@ struct NotchView: View {
                 }
             }
         case .unsure(let app?):
-            Image(nsImage: app.icon).resizable().opacity(0.5)
+            Image(nsImage: app.icon).resizable().interpolation(.high).frame(width: 28, height: 28)
         case .media(let app?, _, _):
             Image(nsImage: app.icon).resizable().interpolation(.high).frame(width: 28, height: 28)
         case .media(nil, _, _):
             Image(systemName: "music.note").font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
         case .system(let symbol, let title, _) where title.hasSuffix("…"):
-            WorkingIcon(symbol: symbol)
+            OrbitSparkles(symbol: symbol)
         case .system(let symbol, _, _):
             Image(systemName: symbol).font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
                 .contentTransition(.symbolEffect(.replace))
@@ -233,7 +252,7 @@ struct NotchView: View {
             Image(systemName: "timer").font(.system(size: 20, weight: .semibold)).foregroundStyle(.orange)
         case .badge(let s, _, let tint):
             Image(systemName: s).font(.system(size: 18, weight: .semibold)).foregroundStyle(tint)
-        case .idle, .answer:
+        case .idle, .answer, .agenda, .playlists:
             EmptyView()
         }
     }
@@ -262,11 +281,13 @@ struct NotchView: View {
         case .unsure(let app?): "Did you mean \(app.name)?"
         case .unsure(nil): "Didn’t catch that"
         case .message(let text): text
-        case .level(let k, let v): "\(k == .volume ? "Volume" : "Brightness") \(v)%"
-        case .nowPlaying: music.track?.title ?? ""
+        case .level(let k, let v): "\(k.label) \(v)%"
+        case .nowPlaying: music.track?.title ?? "Nothing is playing"
         case .timerDone: "Time’s up"
         case .badge(_, let text, _): text
         case .answer(let t, _): t
+        case .agenda: "Calendar"
+        case .playlists(let t, _): t
         case .idle: ""
         }
     }
@@ -274,7 +295,7 @@ struct NotchView: View {
     private var subtitle: String? {
         switch model.phase {
         case .listening: model.isLocked ? (model.dictationOnly ? "Dictating · tap ⌥ to stop" : "Locked · tap ⌥ to stop") : model.dictationOnly ? "Dictating · release to type" : "Release ⌥ to run"
-        case .thinking: "Jev is deciding…"
+        case .thinking: "Working on it…"
         case .unsure: "Say it again a bit clearer"
         case .opened(_, let detail): detail
         case .media(_, _, let detail): detail
@@ -405,24 +426,32 @@ private struct AnswerCard: View {
     }
 }
 
-/// Busy icon: the symbol breathes inside a spinning gradient ring (Apple Intelligence colors).
-private struct WorkingIcon: View {
-    let symbol: String
-    @State private var spin = false
+/// Busy icon: sparkles circling an invisible orbit, tilted so they swing nearer (bigger, brighter) and farther (smaller, dimmer).
+/// With a symbol (e.g. a magnifier), it sits still in the middle while the sparkles orbit it.
+private struct OrbitSparkles: View {
+    var symbol: String? = nil
     var body: some View {
-        ZStack {
-            Circle()
-                .stroke(AngularGradient(colors: [.purple, .pink, .orange, .yellow, .cyan, .purple], center: .center), style: .init(lineWidth: 2, lineCap: .round))
-                .frame(width: 26, height: 26)
-                .mask(Circle().trim(from: 0, to: 0.72).stroke(lineWidth: 3).frame(width: 26, height: 26))
-                .rotationEffect(.degrees(spin ? 360 : 0))
-            Image(systemName: symbol)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white)
-                .symbolEffect(.pulse, options: .repeating)
+        TimelineView(.animation) { ctx in
+            let t = ctx.date.timeIntervalSinceReferenceDate
+            ZStack {
+                ForEach(0..<3, id: \.self) { i in
+                    let a = t * 2.4 + Double(i) * 2 * .pi / 3
+                    let depth = (sin(a) + 1) / 2                  // 0 far · 1 near
+                    Image(systemName: "sparkle")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.white)
+                        .scaleEffect(0.45 + depth * 0.75)
+                        .opacity(0.35 + depth * 0.65)
+                        .rotationEffect(.radians(a * 0.5))
+                        .offset(x: cos(a) * 10, y: sin(a) * 4)    // flat ellipse = a tilted circle
+                        .zIndex(depth)
+                }
+                if let symbol {
+                    Image(systemName: symbol).font(.system(size: 11, weight: .semibold)).foregroundStyle(.white).zIndex(0.5)
+                }
+            }
+            .frame(width: 28, height: 28)
         }
-        .frame(width: 28, height: 28)
-        .onAppear { withAnimation(.linear(duration: 1.1).repeatForever(autoreverses: false)) { spin = true } }
     }
 }
 
@@ -440,6 +469,57 @@ private struct Elapsed: View {
 }
 
 /// A light band sweeping across the text.
+/// Live transcript as a ticker: each word fades and slides in from the right, and the line glides left
+/// to make room; the oldest words fade out at the left edge.
+private struct LiveTranscript: View {
+    let text: String
+
+    // Stable ids: a word keeps its id while recognition rewrites later words, so only new/changed words animate.
+    private var words: [(id: String, word: String)] {
+        text.split(separator: " ").enumerated().map { ("\($0.offset)-\($0.element)", String($0.element)) }
+    }
+
+    @State private var lineWidth: CGFloat = 0
+
+    var body: some View {
+        GeometryReader { geo in
+            HStack(spacing: 4) {
+                ForEach(words, id: \.id) { w in
+                    Text(w.word)
+                        .fixedSize()
+                        .transition(.asymmetric(
+                            insertion: .modifier(active: WordIn(progress: 0), identity: WordIn(progress: 1)),
+                            removal: .opacity))
+                }
+            }
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.white)
+            .fixedSize()
+            .background(GeometryReader { g in Color.clear.onAppear { lineWidth = g.size.width }.onChange(of: g.size.width) { _, w in lineWidth = w } })
+            // Short: starts at the left. Longer than the space: slides left so the newest word stays in view.
+            .offset(x: min(0, geo.size.width - lineWidth))
+            .frame(width: geo.size.width, alignment: .leading)
+            .mask(LinearGradient(stops: [.init(color: lineWidth > geo.size.width ? .clear : .black, location: 0),
+                                         .init(color: .black, location: 0.12), .init(color: .black, location: 1)],
+                                 startPoint: .leading, endPoint: .trailing))
+            .animation(.spring(response: 0.32, dampingFraction: 0.86), value: text)
+            .animation(.spring(response: 0.32, dampingFraction: 0.86), value: lineWidth)
+        }
+        .frame(height: 17)
+        .clipped()
+    }
+}
+
+private struct WordIn: ViewModifier {
+    let progress: CGFloat
+    func body(content: Content) -> some View {
+        content
+            .opacity(progress)
+            .blur(radius: (1 - progress) * 4)
+            .offset(x: (1 - progress) * 10)
+    }
+}
+
 private struct Shimmer: ViewModifier {
     let active: Bool
     @State private var x: CGFloat = -1
@@ -458,5 +538,122 @@ private struct Shimmer: ViewModifier {
                 .opacity(0.85)
                 .onAppear { withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) { x = 1 } }
         }
+    }
+}
+
+/// iOS Calendar widget, notch-sized: date tile + day header, all-day events as tinted pills on one line,
+/// then one row per timed event (time · color bar · title).
+private struct AgendaCard: View {
+    let day: Date
+    let events: [NotchModel.AgendaItem]
+    let more: Int
+
+    static let header: CGFloat = 34, pills: CGFloat = 22, row: CGFloat = 22, gap: CGFloat = 8
+    static func height(allDay: Int, timed: Int, more: Int) -> CGFloat {
+        header + gap + (allDay > 0 ? pills + gap : 0) + CGFloat(timed) * row + CGFloat(max(0, timed - 1)) * 4 + (more > 0 ? 18 : 0) + 10
+    }
+
+    private var allDay: [NotchModel.AgendaItem] { events.filter(\.allDay) }
+    private var timed: [NotchModel.AgendaItem] { events.filter { !$0.allDay } }
+    private var dayName: String {
+        Calendar.current.isDateInToday(day) ? "Today" : Calendar.current.isDateInTomorrow(day) ? "Tomorrow" : day.formatted(.dateTime.weekday(.wide))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Self.gap) {
+            HStack(spacing: 10) {
+                // Calendar app icon: red weekday over the date.
+                VStack(spacing: -1) {
+                    Text(day.formatted(.dateTime.weekday(.abbreviated)).uppercased())
+                        .font(.system(size: 8, weight: .bold)).foregroundStyle(.red)
+                    Text(day.formatted(.dateTime.day()))
+                        .font(.system(size: 16, weight: .medium)).foregroundStyle(.black)
+                }
+                .frame(width: 32, height: 32)
+                .background(.white, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(dayName).font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
+                    Text(day.formatted(.dateTime.month(.wide).day())).font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
+                }
+                Spacer()
+                Text("\(events.count + more) event\(events.count + more == 1 ? "" : "s")")
+                    .font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.45))
+            }
+            .frame(height: Self.header)
+
+            if !allDay.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(allDay.indices, id: \.self) { i in
+                        let e = allDay[i]
+                        Text(e.title)
+                            .font(.system(size: 11, weight: .semibold)).foregroundStyle(e.color.mix(with: .white, by: 0.35))
+                            .lineLimit(1)
+                            .padding(.horizontal, 8).frame(height: Self.pills)
+                            .background(e.color.opacity(0.22), in: Capsule())
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(timed.indices, id: \.self) { i in
+                    let e = timed[i]
+                    HStack(spacing: 8) {
+                        Text(e.time)
+                            .font(.system(size: 12, weight: .medium).monospacedDigit()).foregroundStyle(.white.opacity(0.5))
+                            .frame(width: 44, alignment: .leading)
+                        Capsule().fill(e.color).frame(width: 3, height: 14)
+                        Text(e.title).font(.system(size: 13, weight: .medium)).foregroundStyle(.white).lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                    .frame(height: Self.row)
+                }
+                if more > 0 {
+                    Text("+\(more) more").font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.4))
+                        .padding(.leading, 55).frame(height: 14)
+                }
+            }
+        }
+        .padding(.horizontal, 14).padding(.top, 6)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+/// "Which playlist?": cover tiles you can pick by name or number.
+private struct PlaylistCard: View {
+    let title: String
+    let items: [NotchModel.PlaylistItem]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "music.note.list").foregroundStyle(.pink)
+                Text(title).foregroundStyle(.white.opacity(0.6))
+                Spacer()
+                Text("Say one").foregroundStyle(.white.opacity(0.4))
+            }
+            .font(.system(size: 11, weight: .semibold))
+            HStack(alignment: .top, spacing: 12) {
+                ForEach(items.indices, id: \.self) { i in
+                    VStack(alignment: .leading, spacing: 5) {
+                        Group {
+                            if let art = items[i].artwork { Image(nsImage: art).resizable().aspectRatio(contentMode: .fill) }
+                            else { LinearGradient(colors: [.pink, .purple], startPoint: .topLeading, endPoint: .bottomTrailing)
+                                    .overlay(Image(systemName: "music.note").font(.system(size: 22, weight: .semibold)).foregroundStyle(.white.opacity(0.85))) }
+                        }
+                        .frame(width: 92, height: 92)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay(alignment: .topLeading) {
+                            Text("\(i + 1)").font(.system(size: 10, weight: .bold).monospacedDigit()).foregroundStyle(.white)
+                                .frame(width: 16, height: 16).background(.black.opacity(0.55), in: Circle()).padding(5)
+                        }
+                        Text(items[i].name).font(.system(size: 11, weight: .medium)).foregroundStyle(.white).lineLimit(1)
+                            .frame(width: 92, alignment: .leading)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 14).padding(.top, 4)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }

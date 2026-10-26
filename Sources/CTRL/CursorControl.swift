@@ -138,22 +138,20 @@ enum CursorControl {
             await Typer.type(message, pressReturn: true)
             return Result(symbol: "paperplane", title: "Asked Cursor", detail: "“\(message.prefix(50))”")
         case .testLocally:
-            let name = project ?? s.currentProject
-            guard let name, let folder = ProjectRunner.folder(named: name) else {
-                return Result(symbol: "questionmark.folder", title: "Which project?", detail: "Open its chat, then say it again")
+            // Cursor's agent knows the project; we just ask it. Another project named: go to its latest chat first.
+            if let project, project != s.currentProject {
+                if let c = s.chats.filter({ $0.project == project }).min(by: { $0.minutesAgo < $1.minutesAgo }) { press(c.element) }
+                else if let b = s.newAgent[project] { press(b) }
+                try? await Task.sleep(for: .milliseconds(500))
             }
-            guard let run = ProjectRunner.detect(in: folder) else {
-                return Result(symbol: "questionmark.app", title: "Don’t know how to run \(name)", detail: "Add a routine named “test \(name) locally”")
-            }
-            await openTerminal(menu: menu)
-            let before = run.web ? ProjectRunner.listeningPorts() : []
-            await Typer.type("cd \(shellQuote(folder.path)) && \(run.command)", pressReturn: true)
-            if run.web {
-                Task { await openBrowserWhenReady(known: run.port, before: before, menu: menu, app: s.app) }
-            }
-            return Result(symbol: "play.rectangle", title: run.command, detail: name + (run.web ? " · opens in the browser when ready" : ""))
+            if let c = s.composer, project == nil || project == s.currentProject { focus(c) } else { Keys.press(37, flags: .maskCommand) }   // ⌘L
+            try? await Task.sleep(for: .milliseconds(150))
+            await Typer.type(Self.testPrompt, pressReturn: true)
+            return Result(symbol: "play.rectangle", title: "Asked Cursor to run it", detail: project ?? s.currentProject)
         }
     }
+
+    static let testPrompt = "Run this project locally so I can test it: start whatever it needs in the terminal, and when it's up, open it in Cursor's browser."
 
     /// A conversation whose title you mostly said (at least 3 of its words, ≥ 75% of them).
     static func chatNamed(in spoken: String, snapshot s: Snapshot) -> Chat? {
@@ -188,36 +186,6 @@ enum CursorControl {
     }
 
     // MARK: Helpers
-
-    private static func openTerminal(menu: MenuReader.Snapshot?) async {
-        if let item = menu?.items.first(where: { $0.path.last == "New Terminal" }), let app = menu?.app { _ = await MenuReader.press(item, in: app) }
-        else { Keys.press(50, flags: [.maskControl, .maskShift]) }   // ⌃⇧` (VS Code's new terminal)
-        try? await Task.sleep(for: .milliseconds(1200))
-    }
-
-    /// Waits for the dev server: the port we know about, or whichever new local port opens first (monorepos).
-    private static func openBrowserWhenReady(known: Int?, before: Set<Int>, menu: MenuReader.Snapshot?, app: NSRunningApplication) async {
-        let deadline = Date().addingTimeInterval(120)
-        var port: Int?
-        while Date() < deadline, port == nil {
-            try? await Task.sleep(for: .seconds(1))
-            let fresh = ProjectRunner.listeningPorts().subtracting(before).filter { $0 >= 1024 }
-            if let k = known, fresh.contains(k) { port = k }
-            else if let p = fresh.sorted().first { port = p }
-        }
-        guard let port else { return }
-        try? await Task.sleep(for: .milliseconds(800))   // let it finish booting
-        app.activate()
-        let url = "http://localhost:\(port)"
-        if let item = menu?.items.first(where: { $0.path.last == "New Browser" }) { _ = await MenuReader.press(item, in: app) }
-        else { NSWorkspace.shared.open(URL(string: url)!); return }
-        try? await Task.sleep(for: .milliseconds(900))
-        Keys.press(37, flags: .maskCommand)   // ⌘L: address bar
-        try? await Task.sleep(for: .milliseconds(150))
-        await Typer.type(url, pressReturn: true)
-    }
-
-    private static func shellQuote(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
 
     private static func press(_ el: AXUIElement) { AXUIElementPerformAction(el, kAXPressAction as CFString) }
 
@@ -271,98 +239,5 @@ enum CursorControl {
         if T.self == AXUIElement.self { guard CFGetTypeID(v) == AXUIElementGetTypeID() else { return nil }; return (v as! T) }
         if T.self == AXValue.self { guard CFGetTypeID(v) == AXValueGetTypeID() else { return nil }; return (v as! T) }
         return v as? T
-    }
-}
-
-/// Where a project lives and how to start it. Read from the project's own files: no guessing, no model call.
-enum ProjectRunner {
-    struct Run { let command: String; let port: Int?; var web = false }
-
-    /// Local TCP ports something is listening on right now.
-    static func listeningPorts() -> Set<Int> {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
-        p.arguments = ["-nP", "-iTCP", "-sTCP:LISTEN", "-Fn"]
-        let out = Pipe(); p.standardOutput = out; p.standardError = FileHandle.nullDevice
-        guard (try? p.run()) != nil else { return [] }
-        let data = out.fileHandleForReading.readDataToEndOfFile()
-        p.waitUntilExit()
-        var ports: Set<Int> = []
-        for line in String(decoding: data, as: UTF8.self).split(separator: "\n") where line.hasPrefix("n") {
-            if let colon = line.lastIndex(of: ":"), let n = Int(line[line.index(after: colon)...]) { ports.insert(n) }
-        }
-        return ports
-    }
-
-    /// Cursor's own record of opened folders, matched by folder name (real checkouts before worktrees).
-    static func folder(named name: String) -> URL? {
-        let storage = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Application Support/Cursor/User/workspaceStorage")
-        let dirs = (try? FileManager.default.contentsOfDirectory(at: storage, includingPropertiesForKeys: nil)) ?? []
-        var hits: [URL] = []
-        for d in dirs {
-            guard let data = try? Data(contentsOf: d.appending(path: "workspace.json")),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let s = json["folder"] as? String, let url = URL(string: s), url.isFileURL else { continue }
-            if url.lastPathComponent.caseInsensitiveCompare(name) == .orderedSame, FileManager.default.fileExists(atPath: url.path) { hits.append(url) }
-        }
-        if let h = hits.first(where: { !$0.path.contains("/worktrees/") }) ?? hits.first { return h }
-        let guess = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Projects/\(name)")
-        return FileManager.default.fileExists(atPath: guess.path) ? guess : nil
-    }
-
-    static func detect(in dir: URL) -> Run? {
-        let fm = FileManager.default
-        func has(_ p: String) -> Bool { fm.fileExists(atPath: dir.appending(path: p).path) }
-
-        if let data = try? Data(contentsOf: dir.appending(path: "package.json")),
-           let pkg = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            let scripts = pkg["scripts"] as? [String: String] ?? [:]
-            if let name = ["dev", "start", "serve", "preview"].first(where: { scripts[$0] != nil }) {
-                let pm = has("pnpm-lock.yaml") ? "pnpm" : (has("bun.lockb") || has("bun.lock")) ? "bun" : has("yarn.lock") ? "yarn" : "npm"
-                let command = pm == "npm" && name != "start" ? "npm run \(name)" : "\(pm) \(pm == "npm" ? "start" : name)"
-                return Run(command: command, port: port(script: scripts[name]!, pkg: pkg), web: isWeb(pkg: pkg, dir: dir))
-            }
-        }
-        for s in ["scripts/dev.sh", "scripts/run.sh", "scripts/install.sh", "dev.sh", "run.sh"] where has(s) { return Run(command: "./" + s, port: nil) }
-        if let mk = try? String(contentsOf: dir.appending(path: "Makefile"), encoding: .utf8) {
-            for t in ["dev", "run", "serve", "start"] where mk.range(of: "(?m)^\(t):", options: .regularExpression) != nil { return Run(command: "make \(t)", port: nil) }
-        }
-        if has("manage.py") { return Run(command: "python manage.py runserver", port: 8000, web: true) }
-        if has("Package.swift") { return Run(command: "swift run", port: nil) }
-        if has("Cargo.toml") { return Run(command: "cargo run", port: nil) }
-        if has("go.mod") { return Run(command: "go run .", port: nil) }
-        return nil
-    }
-
-    /// Serves pages: a web framework here or in any workspace package, or a server library.
-    private static func isWeb(pkg: [String: Any], dir: URL) -> Bool {
-        let web = ["next", "nuxt", "vite", "astro", "@sveltejs/kit", "react-scripts", "@remix-run/dev", "express", "hono", "fastify", "koa", "@nestjs/core", "wrangler", "@angular/core", "gatsby", "@remotion/cli"]
-        func deps(_ p: [String: Any]) -> Set<String> {
-            Set((p["dependencies"] as? [String: Any] ?? [:]).keys).union((p["devDependencies"] as? [String: Any] ?? [:]).keys)
-        }
-        if !deps(pkg).isDisjoint(with: web) { return true }
-        // Monorepo: look one level into apps/* and packages/*.
-        for sub in ["apps", "packages", "services"] {
-            let base = dir.appending(path: sub)
-            for d in (try? FileManager.default.contentsOfDirectory(at: base, includingPropertiesForKeys: nil)) ?? [] {
-                if let data = try? Data(contentsOf: d.appending(path: "package.json")),
-                   let p = try? JSONSerialization.jsonObject(with: data) as? [String: Any], !deps(p).isDisjoint(with: web) { return true }
-            }
-        }
-        return false
-    }
-
-    /// Port from the script ("--port 3001", "-p 4000", "PORT=8080"), else the framework's default. Nil: not a web app.
-    private static func port(script: String, pkg: [String: Any]) -> Int? {
-        let pattern = #"(--port[ =]|-p\s+|PORT=)([0-9]{2,5})"#
-        if let r = script.range(of: pattern, options: .regularExpression),
-           let p = Int(script[r].reversed().prefix { $0.isNumber }.reversed().map(String.init).joined()) { return p }
-        let deps = (pkg["dependencies"] as? [String: Any] ?? [:]).merging(pkg["devDependencies"] as? [String: Any] ?? [:]) { a, _ in a }
-        if deps["next"] != nil || deps["nuxt"] != nil || deps["react-scripts"] != nil || deps["@remix-run/dev"] != nil { return 3000 }
-        if deps["astro"] != nil { return 4321 }
-        if deps["vite"] != nil || deps["@sveltejs/kit"] != nil { return 5173 }
-        if deps["expo"] != nil || deps["react-native"] != nil { return nil }
-        if script.contains("wrangler") { return 8787 }
-        return nil
     }
 }

@@ -359,7 +359,7 @@
 				);
 				OTHER_CODE_SIGN_FLAGS = "--timestamp";
 				PRODUCT_BUNDLE_IDENTIFIER = com.armandas.ctrl;
-				PRODUCT_NAME = CTRL;
+				PRODUCT_NAME = Butterfly;
 				SDKROOT = macosx;
 			};
 			name = Release;
@@ -382,7 +382,7 @@
 				);
 				OTHER_CODE_SIGN_FLAGS = "--timestamp";
 				PRODUCT_BUNDLE_IDENTIFIER = com.armandas.ctrl;
-				PRODUCT_NAME = CTRL;
+				PRODUCT_NAME = Butterfly;
 				SDKROOT = macosx;
 			};
 			name = Debug;

@@ -2,7 +2,7 @@ import AppKit
 
 /// First launch from Downloads (or a zip): offer to move CTRL into /Applications, then relaunch from there.
 enum Installer {
-    static let target = URL(fileURLWithPath: "/Applications/CTRL.app")
+    static let target = URL(fileURLWithPath: "/Applications/Butterfly.app")
 
     /// Returns true when the app is relaunching from /Applications (caller should stop setup).
     @MainActor
@@ -15,8 +15,8 @@ enum Installer {
 
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
-        alert.messageText = "Move CTRL to Applications?"
-        alert.informativeText = "CTRL works best from the Applications folder, so it can open at login and keep its permissions."
+        alert.messageText = "Move Butterfly to Applications?"
+        alert.informativeText = "Butterfly works best from the Applications folder, so it can open at login and keep its permissions."
         alert.addButton(withTitle: "Move to Applications")
         alert.addButton(withTitle: "Not Now")
         alert.icon = NSApp.applicationIconImage
@@ -31,8 +31,8 @@ enum Installer {
             try fm.copyItem(at: here, to: target)
         } catch {
             let fail = NSAlert()
-            fail.messageText = "Couldn't move CTRL"
-            fail.informativeText = "Drag CTRL into the Applications folder yourself. (\(error.localizedDescription))"
+            fail.messageText = "Couldn't move Butterfly"
+            fail.informativeText = "Drag Butterfly into the Applications folder yourself. (\(error.localizedDescription))"
             fail.runModal()
             return false
         }

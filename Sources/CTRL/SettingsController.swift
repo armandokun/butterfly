@@ -60,7 +60,7 @@ enum SettingsController {
         Page(key: "wallet", title: "Wallet & Apple Pay", description: "Wallet, Apple Pay, cards", paneID: "com.apple.WalletSettingsExtension"),
         Page(key: "game_center", title: "Game Center", description: "Game Center", paneID: "com.apple.Game-Center-Settings.extension"),
         Page(key: "game_controllers", title: "Game Controllers", description: "game controllers, gamepad", paneID: "com.apple.Game-Controller-Settings.extension"),
-        Page(key: "keyboard", title: "Keyboard", description: "keyboard, shortcuts, key repeat, input sources, dictation, keyboard backlight", paneID: "com.apple.Keyboard-Settings.extension"),
+        Page(key: "keyboard", title: "Keyboard", description: "keyboard settings, shortcuts, key repeat, input sources, dictation (not turning the keyboard light on/off: that is a system control)", paneID: "com.apple.Keyboard-Settings.extension"),
         Page(key: "mouse", title: "Mouse", description: "mouse, scrolling direction, tracking speed", paneID: "com.apple.Mouse-Settings.extension"),
         Page(key: "trackpad", title: "Trackpad", description: "trackpad, gestures, tap to click, force click", paneID: "com.apple.Trackpad-Settings.extension"),
         Page(key: "printers", title: "Printers & Scanners", description: "printers, scanners, add a printer", paneID: "com.apple.Print-Scan-Settings.extension"),

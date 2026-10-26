@@ -3,7 +3,7 @@ import SwiftUI
 
 /// Transparent, click-through panel pinned to the top-center of the notch screen, above everything.
 final class NotchPanel: NSPanel {
-    static let size = CGSize(width: 640, height: 220)
+    static let size = CGSize(width: 640, height: 320)   // tallest card fits; clicks pass through anyway
 
     init<Content: View>(rootView: Content) {
         super.init(contentRect: .init(origin: .zero, size: Self.size),

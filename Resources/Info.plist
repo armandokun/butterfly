@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>CTRL</string>
+	<string>Butterfly</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -13,7 +13,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>CTRL</string>
+	<string>Butterfly</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -23,20 +23,20 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>CTRL opens websites in new browser windows so it can place them side by side.</string>
+	<string>Butterfly opens websites in new browser windows so it can place them side by side.</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>CTRL connects your Bluetooth devices by voice and shows their battery in the notch.</string>
+	<string>Butterfly connects your Bluetooth devices by voice and shows their battery in the notch.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
-	<string>CTRL adds events and reads your agenda when you ask by voice.</string>
+	<string>Butterfly adds events and reads your agenda when you ask by voice.</string>
 	<key>NSLocationUsageDescription</key>
-	<string>macOS only shares the Wi-Fi network name with apps that have Location access. CTRL uses it to show which network you joined.</string>
+	<string>macOS only shares the Wi-Fi network name with apps that have Location access. Butterfly uses it to show which network you joined.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>macOS only shares the Wi-Fi network name with apps that have Location access. CTRL uses it to show which network you joined.</string>
+	<string>macOS only shares the Wi-Fi network name with apps that have Location access. Butterfly uses it to show which network you joined.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>CTRL listens while you hold Option so it can understand your command.</string>
+	<string>Butterfly listens while you hold Option so it can understand your command.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>
-	<string>CTRL creates reminders when you ask by voice.</string>
+	<string>Butterfly creates reminders when you ask by voice.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>CTRL transcribes your voice on-device to understand your command.</string>
+	<string>Butterfly transcribes your voice on-device to understand your command.</string>
 </dict>
 </plist>

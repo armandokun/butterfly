@@ -103,8 +103,8 @@ enum MediaController {
     /// Best Music playlist for the query: every query word must appear in the name; shortest name wins.
     /// No match → a few suggestions (partial word matches first, then your own playlists).
     private static func playPlaylist(matching query: String) async -> Result? {
-        guard let list = run("tell application \"Music\" to get name of every playlist") else { return nil }
-        let names = list.components(separatedBy: ", ")
+        guard let list = run("tell application \"Music\"\nset AppleScript's text item delimiters to linefeed\nreturn (name of every playlist) as text\nend tell") else { return nil }
+        let names = list.components(separatedBy: "\n").filter { !$0.isEmpty }
         let words = query.split(separator: " ").map(String.init)
         let fold: (String) -> String = { $0.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil) }
         guard let name = names.filter({ n in words.allSatisfy { fold(n).contains(fold($0)) } })
@@ -127,6 +127,26 @@ enum MediaController {
     }
 
     // MARK: Helpers
+
+    /// Your own playlists (not Library / smart ones), in Music's order.
+    static func ownPlaylists() -> [String] {
+        run("tell application \"Music\"\nset AppleScript's text item delimiters to linefeed\nreturn (name of every user playlist whose smart is false) as text\nend tell")?
+            .components(separatedBy: "\n").filter { !$0.isEmpty } ?? []
+    }
+
+    /// Cover per playlist: Music has no playlist-art scripting, so its first track's artwork (cached).
+    static func artwork(for names: [String]) -> [(String, NSImage?)] {
+        names.map { name in
+            if let hit = artCache[name] { return (name, hit) }
+            let q = name.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+            var error: NSDictionary?
+            let d = NSAppleScript(source: "tell application \"Music\" to get raw data of artwork 1 of track 1 of playlist \"\(q)\"")?.executeAndReturnError(&error)
+            let img = error == nil ? d.flatMap { NSImage(data: $0.data) } : nil
+            artCache[name] = img
+            return (name, img)
+        }
+    }
+    private static var artCache: [String: NSImage?] = [:]
 
     private static var background: NSWorkspace.OpenConfiguration {
         let c = NSWorkspace.OpenConfiguration()

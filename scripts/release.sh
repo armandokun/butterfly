@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Release build: Xcode archive → Developer ID signed → notarized → stapled → CTRL.zip + /Applications.
+# Release build: Xcode archive → Developer ID signed → notarized → stapled → Butterfly.zip + /Applications.
 # One-time: xcrun notarytool store-credentials CTRL --apple-id <you@icloud.com> --team-id NLHT9F6F5X
 #           (it asks for an app-specific password from account.apple.com)
 set -euo pipefail
@@ -23,24 +23,24 @@ cat > "$OUT/export.plist" <<EOF
 </dict></plist>
 EOF
 xcodebuild -exportArchive -archivePath "$OUT/CTRL.xcarchive" -exportOptionsPlist "$OUT/export.plist" -exportPath "$OUT" -quiet
-APP="$OUT/CTRL.app"
+APP="$OUT/Butterfly.app"
 
 # The bundled helper framework must carry our Developer ID too.
 codesign --force --timestamp --options runtime --sign "Developer ID Application" "$APP/Contents/Resources/MediaRemoteAdapter/MediaRemoteAdapter.framework"
 codesign --force --timestamp --options runtime --entitlements Resources/CTRL.entitlements --sign "Developer ID Application" "$APP"
 
-ditto -c -k --keepParent "$APP" "$OUT/CTRL.zip"
+ditto -c -k --keepParent "$APP" "$OUT/Butterfly.zip"
 if xcrun notarytool history --keychain-profile CTRL >/dev/null 2>&1; then
-  xcrun notarytool submit "$OUT/CTRL.zip" --keychain-profile CTRL --wait
+  xcrun notarytool submit "$OUT/Butterfly.zip" --keychain-profile CTRL --wait
   xcrun stapler staple "$APP"
-  rm "$OUT/CTRL.zip"; ditto -c -k --keepParent "$APP" "$OUT/CTRL.zip"
+  rm "$OUT/Butterfly.zip"; ditto -c -k --keepParent "$APP" "$OUT/Butterfly.zip"
   echo "Notarized ✓"
 else
   echo "Skipped notarization (run the store-credentials line at the top once)."
 fi
 
-pkill -x CTRL 2>/dev/null && sleep 1 || true
-rm -rf /Applications/CTRL.app
-ditto "$APP" /Applications/CTRL.app
-open /Applications/CTRL.app
-echo "Installed /Applications/CTRL.app · shareable: $OUT/CTRL.zip"
+pkill -x Butterfly 2>/dev/null && sleep 1 || true
+rm -rf /Applications/Butterfly.app
+ditto "$APP" /Applications/Butterfly.app
+open /Applications/Butterfly.app
+echo "Installed /Applications/Butterfly.app · shareable: $OUT/Butterfly.zip"

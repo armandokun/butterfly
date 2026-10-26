@@ -94,6 +94,18 @@ struct TypeSafeClient {
         var errorDescription: String? { "TypeSafe \(status): \(body.prefix(140))" }
     }
 
+    /// ⌥ went down: open (or keep alive) the HTTPS connection so the real request skips DNS + TCP + TLS.
+    /// A bodyless HEAD to the host, at most every 20 s; no model call.
+    nonisolated(unsafe) private static var lastPreconnect = Date.distantPast
+    static func preconnect() {
+        guard Date().timeIntervalSince(lastPreconnect) > 20 else { return }
+        lastPreconnect = Date()
+        var req = URLRequest(url: URL(string: "https://api.typesafe.ai/")!)
+        req.httpMethod = "HEAD"
+        req.timeoutInterval = 3
+        URLSession.shared.dataTask(with: req).resume()
+    }
+
     func systemOne(state: [String: String], questions: [String: Question], images: [Image] = []) async throws -> Response {
         var req = URLRequest(url: URL(string: "https://api.typesafe.ai/v1/systemone")!)
         req.httpMethod = "POST"
@@ -105,6 +117,7 @@ struct TypeSafeClient {
         let assets = images.isEmpty ? nil : Dictionary(uniqueKeysWithValues: images.map { ($0.ref, Asset(data_base64: $0.jpeg.base64EncodedString())) })
         req.httpBody = try JSONEncoder().encode(Request(model: Self.model, state: state, questions: questions, assets: assets))
 
+        if let path = ProcessInfo.processInfo.environment["CTRL_DUMP_REQ"] { try? req.httpBody?.write(to: URL(fileURLWithPath: path)) }
         let (data, resp) = try await session.data(for: req)
         let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard status == 200 else {

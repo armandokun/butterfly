@@ -113,11 +113,22 @@ final class NowPlaying: ObservableObject {
             buffer.removeSubrange(buffer.startIndex...nl)
             guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
             let payload = obj["payload"] as? [String: Any] ?? [:]
-            let new = Self.parse(payload)
+            var new = Self.parse(payload)
             let old = track
+            // Updates without artwork (progress ticks) keep the cover; Apple Music: ask it directly as a fallback.
+            if new != nil, new?.artwork == nil {
+                if old?.id == new?.id, let art = old?.artwork { new?.artwork = art }
+                else if new?.bundleID == "com.apple.Music" { new?.artwork = Self.musicArtwork() }
+            }
             track = new
             if old?.id != new?.id || old?.playing != new?.playing { onChange?(old, new) }
         }
+    }
+
+    private static func musicArtwork() -> NSImage? {
+        var error: NSDictionary?
+        let d = NSAppleScript(source: "tell application \"Music\" to get raw data of artwork 1 of current track")?.executeAndReturnError(&error)
+        return error == nil ? d.flatMap { NSImage(data: $0.data) } : nil
     }
 
     private static func parse(_ p: [String: Any]) -> Track? {

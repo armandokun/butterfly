@@ -7,13 +7,15 @@ import ApplicationServices
 @MainActor
 final class HotkeyMonitor {
     var onBegin: ((_ dictation: Bool) -> Void)?
+    var onArm: (() -> Void)?      // ⌥ just went down (before the hold delay): start the mic
+    var onDisarm: (() -> Void)?   // …it was a shortcut or a tap after all
     var onEnd: (() -> Void)?
     var onCancel: (() -> Void)?
     var onLock: ((_ dictation: Bool) -> Void)?
     var onUnlock: (() -> Void)?
 
     /// Short delay so quick ⌥-shortcuts never flash the notch.
-    private let holdDelay: TimeInterval = 0.15
+    private let holdDelay: TimeInterval = 0.1
     private var pending: DispatchWorkItem?
     private var active = false
     private var activeSide = false   // true: the right ⌥ (dictation) started it
@@ -59,7 +61,7 @@ final class HotkeyMonitor {
         }
 
         if lockCombo {
-            if let pending { pending.cancel(); self.pending = nil }
+            if let pending { pending.cancel(); self.pending = nil }   // the lock starts listening: keep the armed mic
             locked = true
             lockArmed = false
             active = false
@@ -77,9 +79,10 @@ final class HotkeyMonitor {
                 self.onBegin?(dictation)
             }
             pending = work
+            onArm?()
             DispatchQueue.main.asyncAfter(deadline: .now() + holdDelay, execute: work)
         } else if !(activeSide ? rightOnly : optionOnly) {
-            if let pending { pending.cancel(); self.pending = nil }
+            if let pending { pending.cancel(); self.pending = nil; onDisarm?() }
             if active {
                 active = false
                 // Option released → finish. Another modifier added → treat as a shortcut.
@@ -90,7 +93,7 @@ final class HotkeyMonitor {
 
     private func otherKeyPressed() {
         if locked { return }   // typing (yours or CTRL's) doesn't stop locked mode
-        if let pending { pending.cancel(); self.pending = nil }
+        if let pending { pending.cancel(); self.pending = nil; onDisarm?() }
         if active { active = false; onCancel?() }
     }
 }

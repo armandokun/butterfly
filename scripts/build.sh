@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Builds CTRL.app into ./build and signs it with a stable identity
+# Builds Butterfly.app into ./build and signs it with a stable identity
 # (so macOS keeps Mic/Accessibility permissions between rebuilds).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -14,13 +14,13 @@ if [[ -z "${SDKROOT:-}" && "$(xcode-select -p)" == "$CLT" && ! -e $CLT/usr/lib/s
 fi
 swift build -c "$CONFIG"
 
-APP=build/CTRL.app
+APP=build/Butterfly.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
-cp ".build/$CONFIG/CTRL" "$APP/Contents/MacOS/CTRL"
+cp ".build/$CONFIG/CTRL" "$APP/Contents/MacOS/Butterfly"
 # Info.plist is shared with the Xcode project: fill in Xcode's $(VARIABLES) for CLI builds.
-sed -e 's/$(EXECUTABLE_NAME)/CTRL/g' -e 's/$(PRODUCT_BUNDLE_IDENTIFIER)/com.armandas.ctrl/g' \
-    -e 's/$(PRODUCT_NAME)/CTRL/g' -e 's/$(DEVELOPMENT_LANGUAGE)/en/g' -e 's/$(PRODUCT_BUNDLE_PACKAGE_TYPE)/APPL/g' \
+sed -e 's/$(EXECUTABLE_NAME)/Butterfly/g' -e 's/$(PRODUCT_BUNDLE_IDENTIFIER)/com.armandas.ctrl/g' \
+    -e 's/$(PRODUCT_NAME)/Butterfly/g' -e 's/$(DEVELOPMENT_LANGUAGE)/en/g' -e 's/$(PRODUCT_BUNDLE_PACKAGE_TYPE)/APPL/g' \
     -e 's/$(MARKETING_VERSION)/0.1.0/g' -e 's/$(CURRENT_PROJECT_VERSION)/1/g' -e 's/$(MACOSX_DEPLOYMENT_TARGET)/26.0/g' \
     Resources/Info.plist > "$APP/Contents/Info.plist"
 # Now Playing for any app (mediaremote-adapter, BSD-3: github.com/ungive/mediaremote-adapter)
