@@ -19,7 +19,7 @@ final class NotchPanel: NSPanel {
         collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
         isReleasedWhenClosed = false
 
-        let host = NSHostingView(rootView: rootView)
+        let host = FirstClickHostingView(rootView: rootView)
         host.frame = .init(origin: .zero, size: Self.size)
         contentView = host
         reposition()
@@ -27,6 +27,44 @@ final class NotchPanel: NSPanel {
 
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+    private var interactiveOn = false
+
+    /// Notch buttons: SwiftUI reports their frames (window coordinates); the panel turns the click into the action.
+    /// (A non-activating, never-key panel doesn't deliver clicks to SwiftUI Buttons.)
+    static var hotspots: [String: (rect: CGRect, action: () -> Void)] = [:]
+    override func sendEvent(_ event: NSEvent) {
+        if interactiveOn, event.type == .leftMouseUp {
+            let p = event.locationInWindow
+            let flipped = CGPoint(x: p.x, y: Self.size.height - p.y)
+            if let hit = Self.hotspots.values.first(where: { $0.rect.contains(flipped) }) { hit.action(); return }
+        }
+        super.sendEvent(event)
+    }
+
+    /// While on: clickable only over the notch shape (the rest stays click-through), and reports hover.
+    private var hoverTimer: Timer?
+    var onHover: ((Bool) -> Void)?
+    /// The notch's current visible frame (top-anchored, panel coordinates), set by the view.
+    static var visible: CGSize = .zero
+    private var hovering = false
+    func setInteractive(_ on: Bool) {
+        hoverTimer?.invalidate(); hoverTimer = nil
+        ignoresMouseEvents = true
+        interactiveOn = on
+        hovering = false
+        guard on else { return }
+        hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let v = Self.visible
+                // Slightly larger than the shape so it doesn't flicker at the edge.
+                let card = NSRect(x: self.frame.midX - v.width / 2 - 8, y: self.frame.maxY - v.height - 8, width: v.width + 16, height: v.height + 8)
+                let over = NSMouseInRect(NSEvent.mouseLocation, card, false)
+                if self.ignoresMouseEvents == over { self.ignoresMouseEvents = !over }
+                if over != self.hovering { self.hovering = over; self.onHover?(over) }
+            }
+        }
+    }
 
     func reposition() {
         guard let screen = NotchMetrics.screen else { return }
@@ -58,6 +96,11 @@ final class NotchPanel: NSPanel {
             }
         }
     }
+}
+
+/// Buttons work on the first click, without activating Butterfly first.
+private final class FirstClickHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
 enum NotchMetrics {

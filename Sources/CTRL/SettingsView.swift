@@ -74,6 +74,9 @@ private struct GeneralPane: View {
     @AppStorage("developerMode") private var developer = false
     @AppStorage("listeningSounds") private var sounds = true
     @AppStorage("duckMusic") private var duck = true
+    @AppStorage("recordMeetings") private var recordMeetings = true
+    @State private var gemini = ""
+    @State private var hasGemini = Keychain.geminiKey != nil
     @State private var mic = AudioInput.preferredUID
     @State private var mics = AudioInput.devices
 
@@ -115,6 +118,30 @@ private struct GeneralPane: View {
                     }
                     .labelsHidden().frame(width: 260)
                     .onChange(of: mic) { AudioInput.preferredUID = mic }
+                }
+            }
+
+            PondSection(title: "Meetings", tint: Pond.lime,
+                        footer: "When Zoom, Teams, Meet, Slack or FaceTime start a call, the notch asks to record it (the call and your mic). Gemini writes the transcript (Lithuanian and English). Saved in Documents › Butterfly Meetings.") {
+                PondRow(title: "Ask to record when a call starts") {
+                    Toggle("", isOn: $recordMeetings).labelsHidden().toggleStyle(.switch).tint(Pond.moss)
+                }
+                PondRow(title: "Gemini API key") {
+                    HStack(spacing: 6) {
+                        PondField(prompt: hasGemini ? "Saved in Keychain" : "AIza…", text: $gemini, secure: true).frame(width: 200)
+                        Button("Save") {
+                            Keychain.saveGemini(gemini.trimmingCharacters(in: .whitespacesAndNewlines))
+                            gemini = ""; hasGemini = true
+                        }
+                        .buttonStyle(.pond(Pond.lime))
+                        .disabled(gemini.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                }
+                PondRow(title: "Meeting notes", last: true) {
+                    HStack(spacing: 6) {
+                        Button("Transcribe last") { Meetings.shared.retranscribeLast() }.buttonStyle(.pond(Pond.peach))
+                        Button("Open folder") { Meetings.openFolder() }.buttonStyle(.pond(Pond.teal))
+                    }
                 }
             }
 

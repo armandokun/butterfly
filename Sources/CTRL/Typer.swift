@@ -84,7 +84,7 @@ enum Typer {
         let src = CGEventSource(stateID: .hidSystemState)
         let utf16 = Array(text.utf16)
         var i = 0
-        while i < utf16.count {
+        while i < utf16.count, !Task.isCancelled {
             let chunk = Array(utf16[i..<min(i + 16, utf16.count)])   // apps drop longer strings per event
             for down in [true, false] {
                 let e = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: down)

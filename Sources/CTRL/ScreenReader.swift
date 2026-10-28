@@ -8,11 +8,12 @@ import Vision
 /// Reads the selected text, or the front window's text (on-device OCR), and asks Apple's on-device model.
 @MainActor
 enum ScreenReader {
-    enum Action: String { case summarize, explain, ask, reply, readAloud = "read_aloud", stopReading = "stop_reading" }
+    enum Action: String { case summarize, explain, ask, reply, readAloud = "read_aloud", stopReading = "stop_reading", whatsThis = "whats_this" }
 
     static let actionQuestion = TypeSafeClient.Question.choice("What does the user want done with what's on screen?", options: [
         "summarize": "summarize / give the gist / tl;dr of this page, article, email, document, or window",
-        "explain": "explain or tell what this error, message, dialog, or text says / means",
+        "explain": "explain or tell what this error, message, dialog, or text says / means (about text that is already in view)",
+        "whats_this": "'what's this', 'what is this', 'what's that', 'what does this do', 'explain this thing': the user wants to point out (circle) one specific thing on screen and have it identified or explained",
         "ask": "answer a specific question about what's on screen (e.g. 'what's the price', 'when is the deadline', 'who sent this')",
         "reply": "write and type a reply or response to this email/message with the given content (e.g. 'reply saying I'll be there')",
         "read_aloud": "read the selected text or this page out loud",
@@ -116,6 +117,59 @@ enum ScreenReader {
         """
         let r = try await session.respond(to: prompt, options: GenerationOptions(temperature: 0.3))
         return r.content.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "\"“”")))
+    }
+
+    // MARK: "What's this?" (a circled part of the screen)
+
+    /// Explains what the user marked. Gemini looks at the pictures (whole screen with the marks, plus a close-up) when
+    /// a key is saved; otherwise OCR of the close-up + the on-device model.
+    static func explain(_ images: [CGImage], request: String, app: String?) async throws -> String {
+        let question = """
+        The user drew glowing white marks on their Mac screen\(app.map { " (front app: \($0))" } ?? "") and said: “\(request)”. \
+        The first picture is the whole screen with the marks; the second is a close-up of the marked area. \
+        Answer about the marked thing: what it is and what it's for or means, or whatever they asked. At most 3 short sentences, \
+        plain text, no markdown, no preamble. Answer in the language the user spoke.
+        """
+        if let key = Keychain.geminiKey {
+            var parts: [[String: Any]] = []
+            for img in images {
+                guard let jpeg = NSBitmapImageRep(cgImage: img).representation(using: .jpeg, properties: [.compressionFactor: 0.8]) else { continue }
+                parts.append(["inline_data": ["mime_type": "image/jpeg", "data": jpeg.base64EncodedString()]])
+            }
+            guard !parts.isEmpty else { throw Failure.noImage }
+            parts.append(["text": question])
+            let body: [String: Any] = ["contents": [["parts": parts]], "generationConfig": ["temperature": 0.2, "maxOutputTokens": 400]]
+            var req = URLRequest(url: URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(MeetingTranscriber.model):generateContent")!, timeoutInterval: 30)
+            req.httpMethod = "POST"
+            req.setValue(key, forHTTPHeaderField: "x-goog-api-key")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            let obj = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+            if let code = (resp as? HTTPURLResponse)?.statusCode, code >= 300 {
+                throw Failure.gemini((obj["error"] as? [String: Any])?["message"] as? String ?? "HTTP \(code)")
+            }
+            let out = ((obj["candidates"] as? [[String: Any]])?.first?["content"] as? [String: Any])?["parts"] as? [[String: Any]] ?? []
+            let text = out.filter { $0["thought"] as? Bool != true }.compactMap { $0["text"] as? String }.joined().trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty { return text }
+        }
+        guard available else { throw Failure.noModel }
+        guard let close = images.last else { throw Failure.noImage }
+        let text = try await self.text(in: close)
+        guard !text.isEmpty else { throw Failure.noText }
+        return try await answer(.explain, request: request, text: text, app: app)
+    }
+
+    enum Failure: LocalizedError {
+        case noImage, noModel, noText, gemini(String)
+        var errorDescription: String? {
+            switch self {
+            case .noImage: "Couldn't capture that part of the screen"
+            case .noModel: "Add a Gemini key in Settings, or turn on Apple Intelligence"
+            case .noText: "No text there to read (add a Gemini key to understand pictures)"
+            case .gemini(let m): m
+            }
+        }
     }
 
     // MARK: Speech

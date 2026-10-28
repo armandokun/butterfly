@@ -11,7 +11,7 @@ struct NotchView: View {
     private enum Presentation: Hashable { case closed, compact, expanded }
     private var presentation: Presentation {
         switch model.phase {
-        case .idle: playingIdle || timerIdle ? .compact : .closed
+        case .idle: playingIdle || timerIdle || model.recording != nil || model.transcribing != nil ? .compact : .closed
         case .listening where model.transcript.isEmpty: .compact   // just widen beside the notch
         case .level: .compact
         case .badge: .compact
@@ -32,6 +32,7 @@ struct NotchView: View {
         case .agenda(_, let ev, let more):
             AgendaCard.height(allDay: ev.filter(\.allDay).count, timed: ev.filter { !$0.allDay }.count, more: more)
         case .playlists: 168
+        case .meetingPrompt, .recordingCard, .transcriptReady, .stopPrompt: 62
         default: nil
         }
     }
@@ -45,6 +46,8 @@ struct NotchView: View {
     private var compactExtra: CGFloat {
         if case .level = model.phase { return 150 }
         if case .badge(_, let text, _) = model.phase { return min(260, 70 + CGFloat(text.count) * 7.5 * 2) }
+        if model.phase == .idle, model.recording != nil { return 150 }
+        if model.phase == .idle, model.transcribing != nil { return 250 }
         if timerIdle { return 110 }
         return playingIdle ? 80 : 92
     }
@@ -95,6 +98,10 @@ struct NotchView: View {
                             else if let a = answer { AnswerCard(title: a.title, text: a.text) }
                             else if case .agenda(let day, let ev, let more) = model.phase { AgendaCard(day: day, events: ev, more: more) }
                             else if case .playlists(let t, let items) = model.phase { PlaylistCard(title: t, items: items) }
+                            else if case .meetingPrompt(let app) = model.phase { MeetingPromptCard(app: app, answer: model.answerMeeting) }
+                            else if model.phase == .recordingCard, let r = model.recording { RecordingCard(recording: r, stop: model.stopRecording) }
+                            else if case .stopPrompt(let app) = model.phase { StopPromptCard(app: app, since: model.recording?.since, answer: model.answerStop) }
+                            else if case .transcriptReady(let t, let file) = model.phase { TranscriptReadyCard(title: t) { model.openTranscript(file) } }
                             else { content }
                         }
                         .padding(.top, island ? (isPlayer || answer != nil || cardHeight != nil ? 14 : 0) : closed.height + (isPlayer ? 8 : answer != nil || cardHeight != nil ? 4 : 0))
@@ -108,6 +115,7 @@ struct NotchView: View {
                 .mask { shape.padding(.horizontal, island ? 0 : 4).padding(.bottom, 2) }
             }
             .frame(width: size.width, height: size.height)
+            .onChange(of: size, initial: true) { _, s in NotchPanel.visible = s }
             // Idle: nothing drawn. The hardware notch hides it anyway, but screenshots and other screens showed a black bar.
             .opacity(presentation != .closed ? 1 : 0)
             .scaleEffect(presentation == .closed && island ? 0.6 : 1, anchor: .top)
@@ -125,6 +133,8 @@ struct NotchView: View {
         if case .level = model.phase { return "level" }
         if case .badge(let s, _, _) = model.phase { return "badge-\(s)" }
         if timerIdle { return "timer" }
+        if model.phase == .idle, model.recording != nil { return "recording" }
+        if model.phase == .idle, model.transcribing != nil { return "transcribing" }
         return playingIdle ? "music" : "listen"
     }
 
@@ -133,7 +143,26 @@ struct NotchView: View {
         HStack(spacing: 0) {
             switch model.phase {
             case .idle:
-                if let t = timers.next {
+                if let r = model.recording {
+                    ButterflyMark(size: island ? 18 : closed.height - 14)
+                    Spacer(minLength: 0)
+                    HStack(spacing: 8) {
+                        TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                            Text(Timers.format(ctx.date.timeIntervalSince(r.since)))
+                                .font(.system(size: 13, weight: .medium).monospacedDigit())
+                                .foregroundStyle(.white)
+                                .contentTransition(.numericText())
+                        }
+                        RecordingBars()
+                    }
+                } else if model.transcribing != nil {
+                    ButterflyMark(size: island ? 18 : closed.height - 14)
+                    Spacer(minLength: 0)
+                    HStack(spacing: 7) {
+                        Text("Transcribing").font(.system(size: 12, weight: .semibold)).foregroundStyle(.orange)
+                        ProgressView().controlSize(.mini).tint(.orange)
+                    }
+                } else if let t = timers.next {
                     TimelineView(.periodic(from: .now, by: 1)) { _ in
                         HStack(spacing: 0) {
                             TimerRing(progress: t.progress).frame(width: 16, height: 16)
@@ -252,7 +281,7 @@ struct NotchView: View {
             Image(systemName: "timer").font(.system(size: 20, weight: .semibold)).foregroundStyle(.orange)
         case .badge(let s, _, let tint):
             Image(systemName: s).font(.system(size: 18, weight: .semibold)).foregroundStyle(tint)
-        case .idle, .answer, .agenda, .playlists:
+        case .idle, .answer, .agenda, .playlists, .meetingPrompt, .recordingCard, .transcriptReady, .stopPrompt:
             EmptyView()
         }
     }
@@ -288,6 +317,10 @@ struct NotchView: View {
         case .answer(let t, _): t
         case .agenda: "Calendar"
         case .playlists(let t, _): t
+        case .meetingPrompt: "Record this meeting?"
+        case .recordingCard: "Recording"
+        case .transcriptReady: "Transcript ready"
+        case .stopPrompt: "Call ended?"
         case .idle: ""
         }
     }
@@ -314,6 +347,180 @@ struct NotchView: View {
 
     private static func list(_ names: [String]) -> String {
         names.count <= 1 ? names.joined() : names.dropLast().joined(separator: ", ") + " & " + names.last!
+    }
+}
+
+/// "Record this meeting?" · Not now / Record. Shown when a call starts; no answer in 30 s = not recorded.
+private struct MeetingPromptCard: View {
+    let app: String
+    let answer: (Bool) -> Void
+    private var icon: NSImage? {
+        let name = app.replacingOccurrences(of: " call", with: "")
+        return NSWorkspace.shared.runningApplications.first { $0.localizedName == name }?.icon
+    }
+    var body: some View {
+        HStack(spacing: 12) {
+            ZStack(alignment: .bottomTrailing) {
+                if let icon { Image(nsImage: icon).resizable().interpolation(.high).frame(width: 34, height: 34) }
+                else { Image(systemName: "video.fill").font(.system(size: 20)).foregroundStyle(.white).frame(width: 34, height: 34) }
+                Circle().fill(.red).frame(width: 11, height: 11).overlay(Circle().stroke(.black, lineWidth: 2))
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Record this meeting?").font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
+                Text(app).font(.system(size: 11)).foregroundStyle(.white.opacity(0.5)).lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            Button("Not now") { answer(false) }
+                .buttonStyle(NotchButton(fill: .white.opacity(0.14), ink: .white))
+                .hotspot("meeting.no") { answer(false) }
+            Button { answer(true) } label: { Label("Record", systemImage: "record.circle.fill") }
+                .buttonStyle(NotchButton(fill: .red, ink: .white))
+                .hotspot("meeting.yes") { answer(true) }
+        }
+        .frame(maxHeight: .infinity)
+        .onDisappear { NotchPanel.hotspots["meeting.yes"] = nil; NotchPanel.hotspots["meeting.no"] = nil }
+    }
+}
+
+extension View {
+    /// Registers this view's frame (in the notch panel) as a click target, see `NotchPanel.sendEvent`.
+    func hotspot(_ id: String, action: @escaping () -> Void) -> some View {
+        background(GeometryReader { g in
+            Color.clear
+                .onAppear { NotchPanel.hotspots[id] = (g.frame(in: .global), action) }
+                .onChange(of: g.frame(in: .global)) { _, f in NotchPanel.hotspots[id] = (f, action) }
+        })
+    }
+}
+
+/// Hover the recording pill: app, elapsed time, Stop.
+private struct RecordingCard: View {
+    let recording: NotchModel.Recording
+    let stop: () -> Void
+    var body: some View {
+        HStack(spacing: 12) {
+            ButterflyMark(size: 26).frame(width: 34, height: 34)
+            VStack(alignment: .leading, spacing: 2) {
+                TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                    Text("Recording · \(Timers.format(ctx.date.timeIntervalSince(recording.since)))")
+                        .font(.system(size: 13, weight: .semibold).monospacedDigit()).foregroundStyle(.white)
+                }
+                Text(recording.app).font(.system(size: 11)).foregroundStyle(.white.opacity(0.5)).lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            RecordingBars()
+            Button { stop() } label: { Label("Stop", systemImage: "stop.fill") }
+                .buttonStyle(NotchButton(fill: .red, ink: .white))
+                .hotspot("recording.stop") { stop() }
+        }
+        .frame(maxHeight: .infinity)
+        .onDisappear { NotchPanel.hotspots["recording.stop"] = nil }
+    }
+}
+
+/// The Butterfly mark (menu bar glyph), white.
+private struct ButterflyMark: View {
+    var size: CGFloat = 18
+    var body: some View {
+        if let img = Bundle.main.image(forResource: "menubar") {
+            Image(nsImage: img).renderingMode(.template).resizable().interpolation(.high).scaledToFit()
+                .foregroundStyle(.white).frame(width: size, height: size)
+        } else {
+            Image(systemName: "waveform").foregroundStyle(.white)
+        }
+    }
+}
+
+/// Red level bars that move with the call's sound (anyone speaking).
+private struct RecordingBars: View {
+    private static let shape: [CGFloat] = [0.45, 0.8, 1, 0.7, 0.5]
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 0.1)) { ctx in
+            let level = CGFloat(Meetings.shared.level)
+            let t = ctx.date.timeIntervalSinceReferenceDate
+            HStack(spacing: 2.5) {
+                ForEach(Self.shape.indices, id: \.self) { i in
+                    // Idle: a low flicker so it still reads as "live"; speaking: tall, varied bars.
+                    let wobble = 0.55 + 0.45 * abs(sin(t * 7 + Double(i) * 1.7))
+                    Capsule().fill(.red)
+                        .frame(width: 2.5, height: 4 + Self.shape[i] * (2 + level * 12 * wobble))
+                }
+            }
+            .frame(height: 18)
+            .animation(.easeOut(duration: 0.1), value: level)
+        }
+    }
+}
+
+/// The call app let go of the mic: "Call ended?" · Keep recording / Stop.
+private struct StopPromptCard: View {
+    let app: String
+    let since: Date?
+    let answer: (Bool) -> Void
+    var body: some View {
+        HStack(spacing: 12) {
+            ButterflyMark(size: 26).frame(width: 34, height: 34)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Call ended?").font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
+                TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                    Text(since.map { "\(app) · \(Timers.format(ctx.date.timeIntervalSince($0))) recorded" } ?? app)
+                        .font(.system(size: 11).monospacedDigit()).foregroundStyle(.white.opacity(0.5)).lineLimit(1)
+                }
+            }
+            Spacer(minLength: 8)
+            Button("Keep recording") { answer(false) }
+                .buttonStyle(NotchButton(fill: .white.opacity(0.14), ink: .white))
+                .hotspot("stop.keep") { answer(false) }
+            Button { answer(true) } label: { Label("Stop", systemImage: "stop.fill") }
+                .buttonStyle(NotchButton(fill: .red, ink: .white))
+                .hotspot("stop.stop") { answer(true) }
+        }
+        .frame(maxHeight: .infinity)
+        .onDisappear { NotchPanel.hotspots["stop.keep"] = nil; NotchPanel.hotspots["stop.stop"] = nil }
+    }
+}
+
+/// After a meeting: "Transcript ready" · Open.
+private struct TranscriptReadyCard: View {
+    let title: String
+    let open: () -> Void
+    var body: some View {
+        HStack(spacing: 12) {
+            ButterflyMark(size: 26).frame(width: 34, height: 34)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Transcript ready").font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
+                Text(title).font(.system(size: 11)).foregroundStyle(.white.opacity(0.5)).lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            Button { open() } label: { Label("Open", systemImage: "doc.text") }
+                .buttonStyle(NotchButton(fill: .white, ink: .black))
+                .hotspot("transcript.open") { open() }
+        }
+        .frame(maxHeight: .infinity)
+        .onDisappear { NotchPanel.hotspots["transcript.open"] = nil }
+    }
+}
+
+/// Red recording light, gently pulsing.
+private struct RecordingDot: View {
+    var size: CGFloat = 9
+    @State private var on = false
+    var body: some View {
+        Circle().fill(.red).frame(width: size, height: size)
+            .shadow(color: .red.opacity(0.8), radius: on ? 4 : 1)
+            .opacity(on ? 1 : 0.55)
+            .onAppear { withAnimation(.easeInOut(duration: 0.9).repeatForever()) { on = true } }
+    }
+}
+
+private struct NotchButton: ButtonStyle {
+    let fill: Color, ink: Color
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 12, weight: .semibold)).foregroundStyle(ink)
+            .padding(.horizontal, 12).frame(height: 28)
+            .background(Capsule().fill(fill.opacity(configuration.isPressed ? 0.7 : 1)))
+            .contentShape(Capsule())
     }
 }
 

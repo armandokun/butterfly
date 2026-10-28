@@ -22,12 +22,23 @@ final class NotchModel: ObservableObject {
         case answer(title: String, text: String)                // expanded, a few lines (screen summaries, agenda)
         case agenda(day: Date, events: [AgendaItem], more: Int) // expanded, iOS Calendar widget style
         case playlists(title: String, items: [PlaylistItem])    // expanded: artwork tiles to pick from
+        case meetingPrompt(app: String)                         // expanded: "Record this meeting?" with buttons
+        case recordingCard                                      // expanded on hover while recording: time + Stop
+        case transcriptReady(title: String, file: URL)          // expanded: "Transcript ready" + Open
+        case stopPrompt(app: String)                            // expanded: "Call ended?" · Keep / Stop
     }
+    struct Recording: Equatable { let app: String; let since: Date }
+    /// A meeting is being recorded: the notch shows a red dot + time, hover to stop.
+    @Published var recording: Recording? { didSet { updateInteractive() } }
+    /// Gemini is writing the transcript for this meeting: the notch shows "Transcribing" until it's done.
+    @Published var transcribing: String?
     struct AgendaItem: Equatable { let time: String; let title: String; let color: Color; let allDay: Bool }
     struct PlaylistItem: Equatable { let name: String; let artwork: NSImage? }
 
     /// Background events (volume keys, battery, Wi-Fi…): only when the notch isn't busy with you.
     func ambient(_ p: Phase, for seconds: Double = 1.6) {
+        if case .meetingPrompt = phase { return }   // waiting for your answer
+        if case .stopPrompt = phase { return }
         switch phase {
         case .idle, .level: show(p, for: seconds)
         default:
@@ -35,6 +46,16 @@ final class NotchModel: ObservableObject {
             guard !isLocked, phase != .listening, phase != .thinking else { return }
             show(p, for: seconds)
         }
+    }
+
+    /// Must-see events (meeting recording): shown over anything except you talking to Butterfly,
+    /// in which case it waits (up to 30 s) until you're done.
+    func notify(_ p: Phase, for seconds: Double, waited: Int = 0) {
+        if phase == .listening || phase == .thinking, waited < 30 {
+            Task { try? await Task.sleep(for: .seconds(1)); notify(p, for: seconds, waited: waited + 1) }
+            return
+        }
+        show(p, for: seconds)
     }
 
     func startObservers() {
@@ -55,6 +76,24 @@ final class NotchModel: ObservableObject {
             Memory.record(said: "(automatic)", did: "reminded: \(e.title ?? "meeting") starts in \(minutes) min")
         }
         Agenda.shared.start()
+        Meetings.shared.onEvent = { [weak self] e in
+            // Shown even over other results (not ambient): recording must never start or stop unseen.
+            switch e {
+            case .ask(let app): self?.notify(.meetingPrompt(app: app), for: 30)
+            case .unasked: if case .meetingPrompt = self?.phase { self?.close() }
+            case .askStop(let app): self?.notify(.stopPrompt(app: app), for: 118)
+            case .unaskStop: if case .stopPrompt = self?.phase { self?.close() }
+            case .started(let app): self?.recording = Recording(app: app, since: Date())
+            case .stopped(let app): self?.recording = nil; self?.transcribing = app
+            case .discarded: self?.recording = nil; self?.notify(.badge(symbol: "xmark.circle", text: "Not saved", tint: .gray), for: 3)
+            case .saved(let title, let folder): self?.transcribing = nil; self?.notify(.transcriptReady(title: title, file: folder.appendingPathComponent("transcript.md")), for: 12)
+            case .failed(let why):
+                self?.transcribing = nil
+                if !Meetings.shared.isRecording { self?.recording = nil }
+                self?.notify(.system(symbol: "exclamationmark.triangle", title: "Meeting notes", detail: why), for: 8)
+            }
+        }
+        Meetings.shared.start()
         // Brightness keys: same, macOS shows its own HUD.
         KeyCommands.startTracking()
         Clipboard.shared.start()
@@ -63,7 +102,77 @@ final class NotchModel: ObservableObject {
     private var lastTyped: String?
     private var peakLevel: CGFloat = 0   // loudest sound this press: 0 = the mic heard nothing
 
-    @Published var phase: Phase = .idle
+    @Published var phase: Phase = .idle {
+        didSet {
+            updateInteractive()
+            // Timed out or replaced without an answer: no recording.
+            if case .meetingPrompt = oldValue, !isPrompt { Meetings.shared.answer(record: false) }
+        }
+    }
+    private var isPrompt: Bool {
+        switch phase { case .meetingPrompt, .stopPrompt: true; default: false }
+    }
+    private var isReady: Bool { if case .transcriptReady = phase { return true }; return false }
+    /// Card with buttons on screen (prompt, recording card, transcript ready).
+    var showsButtons: Bool { isPrompt || isReady || phase == .recordingCard }
+    private var interactive = false
+    /// The panel tracks the mouse (clicks + hover) while buttons are up or a meeting records.
+    var onInteractive: ((Bool) -> Void)?
+    private func updateInteractive() {
+        let wants = isPrompt || isReady || recording != nil
+        if wants != interactive { interactive = wants; onInteractive?(wants) }
+    }
+
+    func answerStop(_ stopNow: Bool) {
+        Meetings.shared.answerStop(stopNow)
+        dismissTask?.cancel()
+        close()
+    }
+
+    func openTranscript(_ file: URL) {
+        NSWorkspace.shared.activateFileViewerSelecting([file])   // the meeting folder in Finder, transcript selected
+        dismissTask?.cancel()
+        close()
+    }
+
+    /// Mouse over the notch while recording: open the card; leaving it closes it.
+    func hover(_ over: Bool) {
+        guard recording != nil else { return }
+        if case .stopPrompt = phase { return }
+        if over, phase == .idle { dismissTask?.cancel(); phase = .recordingCard }
+        else if !over, phase == .recordingCard { close() }
+    }
+
+    /// Debug (CTRL_RECORDING_STATES=1): every meeting-notes state, 3 s each, for screenshots.
+    func recordingStatesDemo() {
+        let steps: [() -> Void] = [
+            { self.phase = .meetingPrompt(app: "Dia call") },
+            { self.phase = .idle; self.recording = Recording(app: "Dia call", since: Date().addingTimeInterval(-270)) },
+            { self.phase = .recordingCard },
+            { self.phase = .stopPrompt(app: "Dia call") },
+            { self.recording = nil; self.phase = .idle; self.transcribing = "Dia call" },
+            { self.transcribing = nil; self.phase = .transcriptReady(title: "Dia call", file: Meetings.root) },
+            { self.phase = .badge(symbol: "xmark.circle", text: "Not saved", tint: .gray) },
+            { self.phase = .system(symbol: "exclamationmark.triangle", title: "Meeting notes", detail: "Recorded, but no Gemini key to transcribe") },
+            { self.phase = .idle },
+        ]
+        for (i, s) in steps.enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 3) { self.dismissTask?.cancel(); s() }
+        }
+    }
+
+    func stopRecording() {
+        Meetings.shared.stop(byHand: true)
+        close()
+    }
+
+    /// Notch prompt buttons.
+    func answerMeeting(_ record: Bool) {
+        Meetings.log("button: \(record ? "Record" : "Not now")")
+        Meetings.shared.answer(record: record)
+        dismissTask?.cancel()
+        close()
+    }
     @Published var transcript = ""
     @Published var levels: [CGFloat] = Array(repeating: 0, count: 5)
 
@@ -158,6 +267,27 @@ final class NotchModel: ObservableObject {
     func prepare() async {
         recorder.watchDevices()
         try? await recorder.prepare()
+    }
+
+    /// `CTRL_MARKTEST="what is this"`: action mode with a synthetic circle drawn mid-screen, then that sentence.
+    func markTest(_ sentence: String) {
+        isLocked = true
+        accepting = true
+        phase = .listening
+        Task {
+            try? await Task.sleep(for: .seconds(1))
+            let f = NSScreen.screens[0].frame
+            let c = CGPoint(x: f.midX, y: f.midY)   // CG coords, top-left origin (main screen: same as AppKit except y)
+            MarkOverlay.shared.showPassive()
+            for i in 0...40 {
+                let a = Double(i) / 40 * 2 * .pi
+                MarkOverlay.shared.addPoint(global: CGPoint(x: c.x + 120 * cos(a), y: c.y + 80 * sin(a)), newStroke: i == 0)
+            }
+            MarkOverlay.shared.endStroke()
+            print("marks:", MarkOverlay.shared.hasMarks)
+            try? await Task.sleep(for: .seconds(1))
+            enqueue(sentence)
+        }
     }
 
     /// `CTRL_DEMO=1`: cycles through every state for visual checks.
@@ -264,7 +394,11 @@ final class NotchModel: ObservableObject {
     /// Right ⌥: dictation only. What you say gets typed, nothing is interpreted.
     @Published private(set) var dictationOnly = false
 
+    private var requestTask: Task<Void, Never>?
+    private var requestGen = 0
+
     func begin(dictation: Bool = false) {
+        if cancelRequestIfRunning() { return }
         if Date().timeIntervalSince(Self.armedAt) > 0.5 { Self.t0 = Date() } else { Self.t0 = Self.armedAt }
         firstLevel = true
         defer { Self.lap("begin() returned") }
@@ -274,6 +408,7 @@ final class NotchModel: ObservableObject {
         transcript = ""
         levels = levels.map { _ in 0 }
         phase = .listening
+        if !dictation { MarkGesture.shared.enabled = true }   // while you hold ⌥ you can press-hold-drag to mark something
         Cues.listening()
         Ducker.duck()
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
@@ -339,6 +474,7 @@ final class NotchModel: ObservableObject {
         accepting = true
         typedInDictation = false
         if phase != .listening { begin(dictation: dictation) } else { dismissTask?.cancel(); if dictation { dictationOnly = true } }
+        if !dictation { MarkGesture.shared.enabled = true }   // action mode: press-hold-drag marks things to talk about
         NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
     }
 
@@ -347,6 +483,8 @@ final class NotchModel: ObservableObject {
         isLocked = false
         dictating = false
         dictationOnly = false
+        MarkGesture.shared.enabled = false
+        if MarkOverlay.shared.hasMarks { MarkOverlay.shared.cancel() }
         Cues.stopped()
         Ducker.restore()
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
@@ -396,6 +534,7 @@ final class NotchModel: ObservableObject {
                     transcript = next
                     phase = .thinking
                     readFrontApp()   // the last command may have changed what's in front
+                    if (MarkOverlay.shared.hasMarks || MarkGesture.shared.isMarking), await handleMarked(next) { continue }
                     await handle(next)
                 }
                 // Let you see the result before the next one replaces it.
@@ -430,13 +569,22 @@ final class NotchModel: ObservableObject {
         Cues.stopped()
         Ducker.restore()   // on release, before the command runs ("volume up" starts from your real level)
         let released = Date()
-        Task {
+        requestGen += 1
+        let gen = requestGen
+        requestTask = Task {
+            defer { if requestGen == gen { requestTask = nil } }
             await startTask?.value
             let text = await recorder.stop()
             lastFinalizeMs = Int(Date().timeIntervalSince(released) * 1000)
             let silent = peakLevel < 0.02
             peakLevel = 0
+            if text.isEmpty, MarkOverlay.shared.hasMarks, let marks = await MarkOverlay.shared.hide() {
+                MarkGesture.shared.enabled = false   // circled something, said nothing: "what's this"
+                transcript = "What is this?"
+                return await explainMarks(marks, request: "What is this?", app: frontApp)
+            }
             guard !text.isEmpty else {
+                MarkGesture.shared.enabled = false
                 // Total silence = wrong or muted mic, not a quiet voice: say which one, and where to change it.
                 if silent { return show(.system(symbol: "mic.slash", title: "Heard nothing", detail: "Using \(recorder.micName ?? "no microphone") · change it in Settings"), for: 3) }
                 return close()
@@ -454,6 +602,13 @@ final class NotchModel: ObservableObject {
             }
             transcript = text
             phase = .thinking
+            if MarkOverlay.shared.hasMarks || MarkGesture.shared.isMarking {
+                let done = await handleMarked(text)
+                MarkGesture.shared.enabled = false
+                if done { return }
+                MarkOverlay.shared.cancel()   // an ordinary command; no next sentence coming for the marks
+            }
+            MarkGesture.shared.enabled = false
             await handle(text)
         }
     }
@@ -461,11 +616,83 @@ final class NotchModel: ObservableObject {
     func cancel() {
         guard !isLocked else { return }
         dictationOnly = false
+        MarkGesture.shared.enabled = false
+        if MarkOverlay.shared.hasMarks { MarkOverlay.shared.cancel() }
         Task {
             await startTask?.value
             await recorder.cancel()
             Ducker.restore()
             close()
+        }
+    }
+
+    // MARK: Marks in action mode (press, hold still, drag — see MarkGesture)
+
+    /// Said with marks on the screen. Decides what you meant: a question about the marked thing, a job for Cursor
+    /// (with the annotated screenshot pasted into its chat), or an ordinary command that just happened to follow a mark
+    /// (then the marks stay for your next sentence). Returns false when it should be handled as a normal command.
+    private func handleMarked(_ text: String) async -> Bool {
+        // Mid-stroke: let you finish drawing before deciding.
+        for _ in 0..<30 where MarkGesture.shared.isMarking { try? await Task.sleep(for: .milliseconds(100)) }
+        guard MarkOverlay.shared.hasMarks else { return false }
+        let app = frontApp
+        let cursor = NSRunningApplication.runningApplications(withBundleIdentifier: CursorControl.bundleID).first
+        var intent = "ask"
+        if let key = Keychain.apiKey {
+            let client = TypeSafeClient(apiKey: key)
+            var options = [
+                "ask": "wants information about the marked thing: what is this, what does it mean, when did this arrive, who sent it, is this right, explain, translate, summarize",
+                "command": "an ordinary Mac command that has nothing to do with the marked thing (open an app, type text, volume, click something they named, next tab…)"]
+            if cursor != nil {
+                options["cursor"] = "wants their AI coding agent (Cursor) to change, fix, build, move, restyle, add or remove the marked thing, or asks why the marked UI/code behaves like that ('can you change this', 'make this bigger', 'why is this broken', 'remove this')"
+            }
+            if let r = try? await client.systemOne(
+                state: ["spoken": text, "front_app": app?.localizedName ?? "?", "cursor_running": cursor == nil ? "no" : "yes", "front_is_cursor": app?.bundleIdentifier == CursorControl.bundleID ? "yes" : "no"],
+                questions: ["intent": .choice("The user drew a mark on the screen, then said this. What do they want?", options: options)]),
+               let a = r.choice("intent"), a.confidence > 0.35 { intent = a.choice }
+        }
+        DecisionTrace.shared.add(.rule, "marks + “\(text)” → \(intent)", app?.localizedName)
+        if ProcessInfo.processInfo.environment["CTRL_DEBUG"] == "1" { print("marks + “\(text)” → \(intent) (front: \(app?.localizedName ?? "?"))") }
+        if intent == "command" || (intent == "cursor" && cursor == nil) { return false }
+        guard let marks = await MarkOverlay.shared.hide() else { return false }
+        if intent == "cursor", let cursor { await sendToCursor(marks, text: text, cursor: cursor, from: app) }
+        else { await explainMarks(marks, request: text, app: app) }
+        return true
+    }
+
+    /// Pastes the annotated screenshot into Cursor's chat box, types what you said, sends it.
+    private func sendToCursor(_ marks: MarkOverlay.Marks, text: String, cursor: NSRunningApplication, from app: NSRunningApplication?) async {
+        guard let img = marks.images.first,
+              let png = NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:]) else { return }
+        show(.system(symbol: "paperplane", title: "Sending to Cursor…", detail: nil), for: 10)
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setData(png, forType: .png)
+        let snap = CursorControl.snapshot(of: cursor)
+        cursor.activate()
+        try? await Task.sleep(for: .milliseconds(150))
+        if let c = snap?.composer { CursorControl.focus(c) } else { Keys.press(37, flags: .maskCommand) }   // ⌘L
+        try? await Task.sleep(for: .milliseconds(150))
+        Keys.press(9, flags: .maskCommand)   // ⌘V: the screenshot
+        try? await Task.sleep(for: .milliseconds(500))
+        let where_ = app.map { $0.bundleIdentifier == CursorControl.bundleID ? "" : " (seen in \($0.localizedName ?? "another app"))" } ?? ""
+        await Typer.type("\(text) — I marked it with a glowing white line on the screenshot\(where_).", pressReturn: true)
+        show(.system(symbol: "paperplane", title: "Asked Cursor", detail: "“\(text.prefix(50))”"), for: 2.5)
+        Memory.record(said: text, did: "sent a marked screenshot to Cursor", app: app?.localizedName)
+    }
+
+    private func explainMarks(_ marks: MarkOverlay.Marks, request: String, app: NSRunningApplication?) async {
+        show(.system(symbol: "sparkles", title: "Looking…", detail: app?.localizedName), for: 30)
+        do {
+            let answer = try await ScreenReader.explain(marks.images, request: request, app: app?.localizedName)
+            let seconds = min(20, max(6, Double(answer.split(separator: " ").count) / 3))
+            show(.answer(title: request == "What is this?" ? "This is" : "Answer", text: answer), for: seconds)
+            if ProcessInfo.processInfo.environment["CTRL_DEBUG"] == "1" { print("answer:", answer) }
+            Memory.record(said: request, did: "explained a marked part of the screen", app: app?.localizedName)
+        } catch {
+            if Task.isCancelled { return }
+            if ProcessInfo.processInfo.environment["CTRL_DEBUG"] == "1" { print("explain error:", error) }
+            show(.message(error.localizedDescription), for: 3)
         }
     }
 
@@ -484,9 +711,26 @@ final class NotchModel: ObservableObject {
     /// CTRL_PTT=1: simulate holding ⌥ for 2 s, five times (timing test).
     /// ⌥ went down: start the mic during the hold delay; cancelled if it was a shortcut.
     func arm() {
+        if cancelRequestIfRunning() { return }   // a tap (even a very short one) stops a running request
         Self.armedAt = Date()
         recorder.arm()
         TypeSafeClient.preconnect()
+    }
+
+    /// ⌥ (either side) pressed while a request is running: stop it. Any time from release until the result shows
+    /// (finalizing speech, thinking, "Looking…", typing into Cursor). Returns true when something was stopped.
+    @discardableResult
+    private func cancelRequestIfRunning() -> Bool {
+        guard let requestTask, !requestTask.isCancelled, !isLocked else { return false }
+        requestTask.cancel()
+        self.requestTask = nil
+        MarkGesture.shared.enabled = false
+        if MarkOverlay.shared.hasMarks { MarkOverlay.shared.cancel() }
+        recorder.disarm()
+        NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+        DecisionTrace.shared.add(.outcome, "cancelled by ⌥ tap", nil)
+        show(.system(symbol: "xmark", title: "Cancelled", detail: nil), for: 0.9)
+        return true
     }
     static var armedAt = Date.distantPast
     func disarm() { recorder.disarm() }
@@ -578,6 +822,7 @@ final class NotchModel: ObservableObject {
             trace.add(.result, Self.describe(phase), nil, ms: Int(Date().timeIntervalSince(ran) * 1000))
             remember(text, outcome)
         } catch {
+            if Task.isCancelled { return }   // you tapped ⌥ to stop it
             trace.add(.error, error.localizedDescription, Connectivity.shared.explains(error) ? "offline" : nil)
             if let app = AppCatalog.shared.localMatch(text) { return launch(app) }
             if Connectivity.shared.explains(error) { return show(.system(symbol: "wifi.slash", title: "No internet", detail: "Couldn’t process that request. Check your connection."), for: 3) }
@@ -965,6 +1210,12 @@ final class NotchModel: ObservableObject {
             return show(.system(symbol: "speaker.slash.fill", title: ScreenReader.stop() ? "Stopped reading" : "Not reading", detail: nil), for: 1)
         }
         let app = frontApp
+        if action == .whatsThis {
+            show(.system(symbol: "circle.dashed", title: "Circle what you mean", detail: "Esc cancels"), for: 60)
+            guard let marks = await MarkOverlay.shared.selectOnce() else { return show(.message("Nothing circled"), for: 1.2) }
+            await explainMarks(marks, request: request, app: app)
+            return
+        }
         show(.system(symbol: "text.viewfinder", title: "Reading the screen…", detail: app?.localizedName), for: 30)
         guard let (text, selected) = await ScreenReader.text(of: app) else {
             let denied = !CGPreflightScreenCaptureAccess()

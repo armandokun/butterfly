@@ -54,6 +54,39 @@ struct CTRLMain {
         if let i = args.firstIndex(of: "--route"), i + 1 < args.count {
             return routeFromCLI(args[(i + 1)...].joined(separator: " "))
         }
+        if let i = args.firstIndex(of: "--set-gemini-key"), i + 1 < args.count { Keychain.saveGemini(args[i + 1]); print("saved"); return }
+        // `--meeting-apps`: which processes use a mic right now (meeting detection).
+        if args.contains("--meeting-apps") { print(Meetings.micUsers()); return }
+        // `--transcribe file.m4a [title]`: Gemini meeting transcript to stdout.
+        if let i = args.firstIndex(of: "--transcribe"), i + 1 < args.count {
+            Task {
+                do {
+                    guard let key = Keychain.geminiKey else { print("no Gemini key"); exit(1) }
+                    let t = Date()
+                    print(try await MeetingTranscriber.transcribe(URL(fileURLWithPath: args[i + 1]), title: args.count > i + 2 ? args[i + 2] : nil, attendees: [], key: key))
+                    print("(\(Int(Date().timeIntervalSince(t))) s)")
+                } catch { print("error:", error.localizedDescription) }
+                exit(0)
+            }
+            RunLoop.main.run()
+        }
+        // `open Butterfly.app --args --record-test 20`: records 20 s of call audio + mic, writes /tmp/butterfly-record-test.txt.
+        if let i = args.firstIndex(of: "--record-test"), i + 1 < args.count {
+            Task {
+                let r = MeetingRecorder(folder: URL(fileURLWithPath: "/tmp/butterfly-record-test"))
+                var out = ""
+                do {
+                    try await r.start(micUID: AudioInput.chosen?.uid)
+                    try await Task.sleep(for: .seconds(Double(args[i + 1]) ?? 10))
+                    let s = r.stats
+                    let url = try await r.stop()
+                    out = "ok \(url.path) seconds=\(s.seconds) themPeak=\(s.themPeak) mePeak=\(s.mePeak) err=\(r.lastError.map { "\($0)" } ?? "-")"
+                } catch { out = "error \(error)" }
+                try? out.write(toFile: "/tmp/butterfly-record-test.txt", atomically: true, encoding: .utf8)
+                exit(0)
+            }
+            RunLoop.main.run()
+        }
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
@@ -234,6 +267,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if ProcessInfo.processInfo.environment["CTRL_DEBUG"] == "1" { setlinebuf(stdout) }
         AudioOutput.warm()
         if Installer.offerMoveToApplications() { return }
         AppCatalog.shared.reload()
@@ -242,6 +276,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.orderFrontRegardless()
         self.panel = panel
         model.onScreenChange = { [weak self] in self?.panel?.reposition() }
+        model.onInteractive = { [weak self] on in self?.panel?.setInteractive(on) }
+        panel.onHover = { [weak self] over in self?.model.hover(over) }
         panel.onSwipeAway { [weak self] in self?.model.swipeAway() }
 
         hotkey.onBegin = { [weak self] dictation in self?.model.begin(dictation: dictation) }
@@ -281,6 +317,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let say = ProcessInfo.processInfo.environment["CTRL_SAY"] {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.model.say(say.components(separatedBy: "|")) }
         }
+        if let app = ProcessInfo.processInfo.environment["CTRL_MEETING_PROMPT"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { Meetings.shared.simulateAsk(app) }
+        }
+        if ProcessInfo.processInfo.environment["CTRL_RECORDING_STATES"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.model.recordingStatesDemo() }
+        }
+        // CTRL_TRANSCRIPT_READY=1: the "Transcript ready" card for the newest meeting.
+        if ProcessInfo.processInfo.environment["CTRL_TRANSCRIPT_READY"] == "1",
+           let last = (try? FileManager.default.contentsOfDirectory(at: Meetings.root, includingPropertiesForKeys: nil))?.max(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                self.model.notify(.transcriptReady(title: String(last.lastPathComponent.dropFirst(17)), file: last.appendingPathComponent("transcript.md")), for: 12)
+            }
+        }
         if ProcessInfo.processInfo.environment["CTRL_GALLERY"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.model.runGallery() }
             return
@@ -291,6 +340,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if let path = ProcessInfo.processInfo.environment["CTRL_LOCKTEST"] {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.model.lockTest(path) }
+            return
+        }
+        if let s = ProcessInfo.processInfo.environment["CTRL_MARKTEST"] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.model.markTest(s) }
             return
         }
         if !HotkeyMonitor.hasAccessibility { HotkeyMonitor.promptForAccessibility() }
@@ -324,6 +377,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.button?.image = glyph
         let menu = NSMenu()
         menu.addItem(withTitle: "Settings…", action: #selector(editRoutines), keyEquivalent: ",")
+        recordItem = menu.addItem(withTitle: "Record Meeting", action: #selector(toggleRecording), keyEquivalent: "")
+        menu.addItem(withTitle: "Meeting Notes", action: #selector(openMeetings), keyEquivalent: "")
+        menu.delegate = self
         let tree = menu.addItem(withTitle: "Decision Tree", action: #selector(toggleDecisionTree), keyEquivalent: "d")
         tree.keyEquivalentModifierMask = [.command, .option]
         tree.isHidden = !UserDefaults.standard.bool(forKey: "developerMode")
@@ -337,7 +393,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private var decisionTreeItem: NSMenuItem?
+    private var recordItem: NSMenuItem?
     private var developerObserver: NSObjectProtocol?
+
+    @objc private func toggleRecording() { Meetings.shared.toggle() }
+    @objc private func openMeetings() { Meetings.openFolder() }
 
     @objc private func toggleDecisionTree() { DecisionTreeWindow.shared.toggle() }
 
@@ -374,4 +434,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+}
+
+extension AppDelegate: NSMenuDelegate {
+    func menuWillOpen(_ menu: NSMenu) {
+        recordItem?.title = Meetings.shared.recordingApp.map { "Stop Recording · \($0)" } ?? "Record Meeting"
+    }
 }

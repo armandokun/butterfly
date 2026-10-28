@@ -189,7 +189,7 @@ enum CursorControl {
 
     private static func press(_ el: AXUIElement) { AXUIElementPerformAction(el, kAXPressAction as CFString) }
 
-    private static func focus(_ el: AXUIElement) {
+    static func focus(_ el: AXUIElement) {
         AXUIElementSetAttributeValue(el, kAXFocusedAttribute as CFString, kCFBooleanTrue)
         if let f = frame(el) { Clicker.click(at: CGPoint(x: f.midX, y: f.midY)) }
     }
