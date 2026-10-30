@@ -19,7 +19,6 @@
         {
           "name": "Butterfly",
           "image-name": "butterfly.png",
-          "glass": false,
           "fill-specializations": [
             {
               "value": {
@@ -31,6 +30,21 @@
               "value": {
                 "solid": "srgb:1.00000,1.00000,1.00000,1.00000"
               }
+            },
+            {
+              "appearance": "tinted",
+              "value": {
+                "solid": "srgb:1.00000,1.00000,1.00000,1.00000"
+              }
+            }
+          ],
+          "glass-specializations": [
+            {
+              "value": false
+            },
+            {
+              "appearance": "tinted",
+              "value": true
             }
           ]
         }
