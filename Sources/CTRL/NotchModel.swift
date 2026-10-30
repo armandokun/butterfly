@@ -952,6 +952,42 @@ final class NotchModel: ObservableObject {
         show(.media(nil, title: r.name, detail: "done"), for: 1.4)
     }
 
+    /// Click, then look: before/after screenshots tell whether it did what was asked.
+    /// A miss gets one corrected retry; still wrong → say so instead of claiming "Clicked".
+    private func clickChecked(at p: CGPoint, what: String, _ click: () -> Void) async {
+        let display = Memory.display(at: p)
+        lastActionDisplay = display
+        let spoken = lastCommand ?? what
+        func shot() async -> Clicker.Shot? {
+            guard let display, CGPreflightScreenCaptureAccess() else { return nil }
+            return try? await Clicker.screenshot(region: CGDisplayBounds(display), display: display)
+        }
+        let before = await shot()
+        click()
+        guard let router, let before else { show(.system(symbol: "cursorarrow.click", title: "Clicked", detail: what), for: 1.2); return }
+        show(.system(symbol: "eye", title: "Clicked · checking…", detail: what), for: 6)
+        try? await Task.sleep(for: .milliseconds(700))
+        guard let after = await shot(), let check = try? await router.verifyClick(spoken, clicked: what, before: before, after: after) else {
+            show(.system(symbol: "cursorarrow.click", title: "Clicked", detail: what), for: 1.2); return
+        }
+        DecisionTrace.shared.add(.rule, "click check", String(format: "done %.2f", check.done))
+        if check.done >= 0.5 { show(.system(symbol: "checkmark.circle", title: "Done", detail: what), for: 1.2); return }
+        // Retry spot: the zoomed locator (precise), told the first spot missed; never the same spot again.
+        let hint = "\(spoken) (a click at \(Int(p.x)),\(Int(p.y)) on screen missed it)"
+        let located = frontApp.flatMap { app in Task { try? await router.locate(hint, in: app) } }
+        let retry = (await located?.value ?? nil).flatMap { hypot($0.x - p.x, $0.y - p.y) > 12 ? $0 : nil }
+        guard let retry else { show(.system(symbol: "exclamationmark.triangle", title: "Clicked, but it didn't seem to work", detail: what), for: 2.2); return }
+        show(.system(symbol: "arrow.uturn.right", title: "Missed · retrying", detail: what), for: 6)
+        Clicker.click(at: retry)
+        lastActionDisplay = Memory.display(at: retry)
+        try? await Task.sleep(for: .milliseconds(700))
+        if let again = await shot(), let c2 = try? await router.verifyClick(spoken, clicked: what, before: before, after: again), c2.done < 0.5 {
+            show(.system(symbol: "exclamationmark.triangle", title: "Couldn't hit it", detail: what), for: 2.2)
+        } else {
+            show(.system(symbol: "checkmark.circle", title: "Done", detail: what), for: 1.2)
+        }
+    }
+
     private func perform(_ outcome: CommandRouter.Outcome) async {
             if case .undo = outcome {} else if case .notACommand = outcome {} else { prepareUndo(outcome) }
             switch outcome {
@@ -1044,18 +1080,14 @@ final class NotchModel: ObservableObject {
                 show(.system(symbol: "doc.questionmark", title: text, detail: nil), for: 1.8)
             case .click(let el):
                 frontApp?.activate()
-                Clicker.press(el)
-                lastActionDisplay = Memory.display(at: CGPoint(x: el.frame.midX, y: el.frame.midY))
-                show(.system(symbol: "cursorarrow.click", title: "Clicked", detail: el.label), for: 1.2)
+                await clickChecked(at: CGPoint(x: el.frame.midX, y: el.frame.midY), what: el.label) { Clicker.press(el) }
             case .clickVisual(let app, let what):
                 show(.system(symbol: "eye", title: "Looking…", detail: what), for: 15)
                 app.activate()
                 guard let router else { return }
                 do {
                     if let p = try await router.locate(what, in: app) {
-                        Clicker.click(at: p)
-                        lastActionDisplay = Memory.display(at: p)
-                        show(.system(symbol: "cursorarrow.click", title: "Clicked", detail: what), for: 1.2)
+                        await clickChecked(at: p, what: what) { Clicker.click(at: p) }
                     } else {
                         show(.system(symbol: "eye.slash", title: "Couldn't find it", detail: what), for: 1.8)
                     }

@@ -630,6 +630,19 @@ struct CommandRouter {
         return Clicker.point(in: shot, box: b.box)
     }
 
+    /// After a click: did the screen change the way `spoken` wanted? If not, where should it have clicked.
+    struct ClickCheck { let done: Double }
+    @MainActor
+    func verifyClick(_ spoken: String, clicked: String, before: Clicker.Shot, after: Clicker.Shot) async throws -> ClickCheck {
+        let (b, a) = ("img-before-" + UUID().uuidString, "img-after-" + UUID().uuidString)
+        let r = try await client.systemOne(
+            state: ["spoken_command": spoken, "what_was_clicked": clicked, "screen_before": b, "screen_after": a],
+            questions: ["done": .noul("Comparing `screen_before` with `screen_after` (just after the click on `what_was_clicked`): did the click do what `spoken_command` asked — the intended thing is now selected, opened, or active, not something else (a different item, app, or widget)?")],
+            images: [.init(ref: b, jpeg: before.jpeg), .init(ref: a, jpeg: after.jpeg)])
+        let done = r.noul("done") ?? 0.5
+        return ClickCheck(done: done)
+    }
+
     private static func looksLikeSearch(_ spoken: String) -> Bool {
         spoken.lowercased().range(of: #"^\s*(ok(ay)?,?\s+)?(please\s+)?(can you\s+)?(search|google|look\s+up|find)\b"#, options: .regularExpression) != nil
             || spoken.lowercased().range(of: #"\b(search|look up|find)\b.*\b(on|in)\s+(linkedin|twitter|github|reddit|instagram|tiktok|youtube|amazon|spotify|gmail|facebook|pinterest)\b"#, options: .regularExpression) != nil

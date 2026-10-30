@@ -85,6 +85,18 @@ enum CLI {
             for (k, (d, e)) in opts.sorted(by: { $0.value.1.label.count < $1.value.1.label.count }) { print(k, d.prefix(80).replacingOccurrences(of: "\n", with: " "), e.frame) }
             exit(0)
         }
+        // `--verify-dry "click on October 27th"`: before/after check with no click in between (expect done ≈ 0).
+        if let i = args.firstIndex(of: "--verify-dry"), i + 1 < args.count, let key = Keychain.apiKey {
+            Task { @MainActor in
+                let d = CGMainDisplayID()
+                guard let a = try? await Clicker.screenshot(region: CGDisplayBounds(d), display: d),
+                      let b = try? await Clicker.screenshot(region: CGDisplayBounds(d), display: d) else { print("no screenshot"); exit(1) }
+                let c = try? await CommandRouter(client: TypeSafeClient(apiKey: key)).verifyClick(args[i + 1], clicked: args[i + 1], before: a, after: b)
+                print("done:", c.map { String(format: "%.2f", $0.done) } ?? "error")
+                exit(0)
+            }
+            return true
+        }
         // `--widgets`: desktop widgets (Notification Centre AX) with frames and items.
         if args.contains("--widgets") {
             for w in Clicker.widgets() {
