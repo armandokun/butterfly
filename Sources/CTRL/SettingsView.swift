@@ -44,6 +44,7 @@ struct SettingsView: View {
         }
         .frame(width: 640, height: 660)
         .background(Backdrop())
+        .containerBackground(.clear, for: .window)
         .navigationTitle(Self.panes.first { $0.id == pane }?.title ?? "Settings")
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .tint(Design.ink)

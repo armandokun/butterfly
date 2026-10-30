@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Butterfly's design language: white canvas, ink type, editorial serif titles, puffy white pills,
@@ -50,16 +51,16 @@ extension View {
 struct Backdrop: View {
     var body: some View {
         ZStack {
-            Design.canvas
-            LinearGradient(colors: [Color(red: 0.97, green: 0.97, blue: 1), Color(red: 1, green: 0.97, blue: 0.95)],
-                           startPoint: .topLeading, endPoint: .bottomTrailing)
+            // See-through: the desktop shows (blurred) behind the window; faint blobs keep the glass reading.
+            BehindWindowBlur()
+            Color.white.opacity(0.25)
             GeometryReader { g in
                 let w = g.size.width, h = g.size.height
                 ZStack {
-                    blob(Design.pink, 0.22, CGSize(width: w * 0.55, height: w * 0.45)).position(x: w * 0.12, y: h * 0.12)
-                    blob(Design.sky, 0.22, CGSize(width: w * 0.6, height: w * 0.5)).position(x: w * 0.92, y: h * 0.35)
-                    blob(Design.orange, 0.16, CGSize(width: w * 0.55, height: w * 0.45)).position(x: w * 0.2, y: h * 0.75)
-                    blob(Design.violet, 0.16, CGSize(width: w * 0.5, height: w * 0.45)).position(x: w * 0.85, y: h * 0.95)
+                    blob(Design.pink, 0.14, CGSize(width: w * 0.55, height: w * 0.45)).position(x: w * 0.12, y: h * 0.12)
+                    blob(Design.sky, 0.14, CGSize(width: w * 0.6, height: w * 0.5)).position(x: w * 0.92, y: h * 0.35)
+                    blob(Design.orange, 0.10, CGSize(width: w * 0.55, height: w * 0.45)).position(x: w * 0.2, y: h * 0.75)
+                    blob(Design.violet, 0.10, CGSize(width: w * 0.5, height: w * 0.45)).position(x: w * 0.85, y: h * 0.95)
                 }
             }
         }
@@ -70,6 +71,16 @@ struct Backdrop: View {
     private func blob(_ c: Color, _ o: Double, _ s: CGSize) -> some View {
         Ellipse().fill(c.opacity(o)).frame(width: s.width, height: s.height).blur(radius: 70)
     }
+}
+
+/// Translucent window background: blurs whatever is behind the window.
+struct BehindWindowBlur: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let v = NSVisualEffectView()
+        v.blendingMode = .behindWindow; v.material = .hudWindow; v.state = .active
+        return v
+    }
+    func updateNSView(_ v: NSVisualEffectView, context: Context) {}
 }
 
 /// Liquid Glass pill: interactive glass capsule; `prominent` is glass tinted ink with white text (or a custom tint).
