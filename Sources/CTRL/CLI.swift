@@ -76,6 +76,31 @@ enum CLI {
             for h in ScreenMemory.shared.search(args[i + 1]) { print("• [\(ScreenMemory.when(h.entry.t)) · \(h.entry.app) · \(h.entry.title.prefix(40))] score \(h.score)\n   \(h.snippet.prefix(300))") }
             exit(0)
         }
+        // `--click-dry Calendar "click on October 27th"`: top-ranked AX click options in that app; clicks nothing.
+        if let i = args.firstIndex(of: "--click-dry"), i + 2 < args.count {
+            guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == args[i + 1] }) else { print("not running"); exit(1) }
+            let els = Clicker.elements(of: app)
+            let opts = Clicker.options(els, for: args[(i + 2)...].joined(separator: " "), limit: 5)
+            print(els.count, "elements,", els.filter { $0.role == "AXList" }.count, "lists")
+            for (k, (d, e)) in opts.sorted(by: { $0.value.1.label.count < $1.value.1.label.count }) { print(k, d.prefix(80).replacingOccurrences(of: "\n", with: " "), e.frame) }
+            exit(0)
+        }
+        // `--widgets`: desktop widgets (Notification Centre AX) with frames and items.
+        if args.contains("--widgets") {
+            for w in Clicker.widgets() {
+                let f = w.group.frame
+                print("• \(w.app) [\(Int(f.minX)),\(Int(f.minY)) \(Int(f.width))x\(Int(f.height))] window “\(w.title.prefix(50))”")
+                for e in w.items { print("    \(e.role) “\(e.label.prefix(60))” [\(Int(e.frame.minX)),\(Int(e.frame.minY)) \(Int(e.frame.width))x\(Int(e.frame.height))]") }
+            }
+            exit(0)
+        }
+        // `--widget-click-dry "open the weather widget"`: what a widget click would hit; clicks nothing.
+        if let i = args.firstIndex(of: "--widget-click-dry"), i + 1 < args.count {
+            guard let e = Clicker.widgetTarget(for: args[i + 1]) else { print("no widget matches"); exit(1) }
+            let f = e.frame
+            print("\(e.role) “\(e.label.prefix(60))” [\(Int(f.minX)),\(Int(f.minY)) \(Int(f.width))x\(Int(f.height))] → click \(Int(f.midX)),\(Int(f.midY))")
+            exit(0)
+        }
         // `--ax-dump Slack [depth]`: prints the focused window's accessibility tree (debugging the settings crawl).
         if let i = args.firstIndex(of: "--ax-dump"), i + 1 < args.count {
             _ = NSApplication.shared
