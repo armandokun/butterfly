@@ -11,8 +11,8 @@ enum StepSplitter {
     }
 
     /// A joining word that could carry a second command. Without one the sentence is routed as is (no model call, no delay).
-    /// English plus Lithuanian ("ir", "tada", "po to"). Bare "and" only counts before a verb: "Slack and Safari side by side" is one command.
-    private static let conjunction = #/\b(then|after|also|once|before|ir|tada|po to|, and|and (open|close|create|make|go|type|write|search|take|play|send|put|click|turn|set|switch|show|start|stop|add|remove|delete|move|resize|find|tell|say|press|scroll))\b/#
+    /// Bare "and" only counts before a verb: "Slack and Safari side by side" is one command.
+    private static let conjunction = #/\b(then|after|also|once|before|, and|and (open|close|create|make|go|type|write|search|take|play|send|put|click|turn|set|switch|show|start|stop|add|remove|delete|move|resize|find|tell|say|press|scroll))\b/#
     nonisolated static func hasConjunction(_ text: String) -> Bool {
         text.lowercased().firstMatch(of: conjunction) != nil
     }
@@ -43,7 +43,7 @@ enum StepSplitter {
 
     /// Joining and pointing words the split is allowed to drop or replace.
     private static let droppable: Set<String> = ["and", "then", "after", "that", "afterwards", "also", "once", "you're", "youre", "you", "are", "there",
-                                                 "it", "this", "one", "the", "a", "an", "please", "ok", "okay", "um", "uh", "great", "thanks", "thank", "ir", "tada", "po", "to"]
+                                                 "it", "this", "one", "the", "a", "an", "please", "ok", "okay", "um", "uh", "great", "thanks", "thank"]
     private static func covers(_ steps: [String], _ original: String) -> Bool {
         func words(_ s: String) -> [String] { s.lowercased().split { !$0.isLetter && !$0.isNumber && $0 != "'" }.map(String.init) }
         let out = Set(steps.flatMap(words))
@@ -51,7 +51,7 @@ enum StepSplitter {
     }
 
     private static func heuristic(_ t: String) -> [String] {
-        let parts: [String] = t.split(separator: #/,?\s+(?:and then|then|after that|afterwards|and once you're there,?|once you're there,?|and also|ir tada|tada|po to)\s+|,?\s+and\s+(?=(?:open|close|create|make|go|type|write|search|take|play|send|put|click|turn|set|switch|show|start|stop|add|remove|move|find|press|scroll)\b)/#.ignoresCase())
+        let parts: [String] = t.split(separator: #/,?\s+(?:and then|then|after that|afterwards|and once you're there,?|once you're there,?|and also)\s+|,?\s+and\s+(?=(?:open|close|create|make|go|type|write|search|take|play|send|put|click|turn|set|switch|show|start|stop|add|remove|move|find|press|scroll)\b)/#.ignoresCase())
             .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         return parts.count > 1 ? parts : [t]
     }
