@@ -76,6 +76,7 @@ private struct GeneralPane: View {
     @State private var appCount = AppCatalog.shared.apps.count
     @State private var login = LoginItem.enabled
     @AppStorage("developerMode") private var developer = false
+    @State private var exported: String?
     @AppStorage("listeningSounds") private var sounds = true
     @AppStorage("duckMusic") private var duck = true
     @AppStorage("recordMeetings") private var recordMeetings = true
@@ -174,8 +175,19 @@ private struct GeneralPane: View {
                     Button("Rescan") { AppCatalog.shared.reload(); appCount = AppCatalog.shared.apps.count }
                         .buttonStyle(.pond(Pond.teal))
                 }
-                PondRow(title: "Developer mode", last: true) {
+                PondRow(title: "Developer mode", last: !developer) {
                     Toggle("", isOn: $developer).labelsHidden().toggleStyle(.switch).tint(Pond.moss)
+                }
+                if developer {
+                    PondRow(title: "Debug logs · \(exported ?? "every command recorded")", last: true) {
+                        HStack(spacing: 6) {
+                            Button("Reveal logs") { DebugRecorder.reveal() }.buttonStyle(.pond(Pond.teal))
+                            Button("Export debug logs") {
+                                if let zip = DebugRecorder.export() { exported = "saved to Desktop"; NSWorkspace.shared.activateFileViewerSelecting([zip]) } else { exported = "export failed" }
+                            }
+                            .buttonStyle(.pond(Pond.lime))
+                        }
+                    }
                 }
             }
             if LoginItem.needsApproval {

@@ -50,6 +50,14 @@ enum CLI {
             routeFromCLI(args[(i + 1)...].joined(separator: " ")); return true
         }
         if let i = args.firstIndex(of: "--set-gemini-key"), i + 1 < args.count { Keychain.saveGemini(args[i + 1]); print("saved"); exit(0) }
+        // `--export-debug`: zips the developer-mode debug logs (runs + lessons + INDEX.md) to the Desktop.
+        if args.contains("--export-debug") { print(DebugRecorder.export().map { "exported \($0.path)" } ?? "export failed"); exit(0) }
+        // `--debug-runs`: the last 10 recorded commands, said → outcome → verdict.
+        if args.contains("--debug-runs") {
+            for r in DebugRecorder.allRuns().suffix(10).reversed() { print("“\(r.said)” → \(r.outcome ?? "—") → \(r.verdict)\(r.correction.map { " (“\($0)”)" } ?? "")") }
+            exit(0)
+        }
+        if args.contains("--debug-selftest") { debugSelftest(); return true }
         // `--meeting-apps`: which processes use a mic right now (meeting detection).
         if args.contains("--meeting-apps") { print(Meetings.micUsers()); exit(0) }
         // `--memory-test 15`: runs screen memory for N seconds and prints what it captured (debugging).
@@ -280,6 +288,47 @@ enum CLI {
 
     /// Debug: `CTRL --route "open facebook dot com"` prints what would happen, opens nothing.
     /// Add `--exec` to actually run it. Starts the work; the caller keeps the run loop alive.
+    /// `--debug-selftest` (developer mode, ideally with CTRL_DEBUG_DIR=/tmp/…): a fake run with a late click check,
+    /// a voice correction → declined, then checks run.md, lessons.jsonl, past_mistakes, the skill drop and the export.
+    @MainActor private static func debugSelftest() {
+        Task { @MainActor in
+            func check(_ ok: Bool, _ what: String) { print(ok ? "ok  " : "FAIL", what); if !ok { exit(1) } }
+            check(DebugRecorder.enabled, "developer mode on")
+            let trace = DecisionTrace.shared, dbg = DebugRecorder.shared
+            let pattern = "selftest open {thing} widget"
+            SkillStore.shared.learn(name: "Selftest", pattern: pattern, steps: [], example: "selftest open weather widget")
+            trace.begin("click the weather widget")
+            let id = trace.currentID!
+            dbg.context(NSRunningApplication.current, summary: "0 menu items · 3 clickable elements")
+            dbg.options(click: ["the button labeled “Weather”", "the button labeled “Stocks”"], menu: [])
+            dbg.skill(pattern)
+            trace.add(.outcome, "click(Weather)", nil, ms: 120)
+            dbg.hold(id)                                   // a click check still running…
+            dbg.action("performed click(Weather)")
+            trace.end()                                    // …route finished first
+            trace.add(.rule, "click check", "done 0.20", run: id)   // late event lands on the same run
+            let ci = dbg.click("Weather", at: CGPoint(x: 100, y: 200), run: id)
+            dbg.clickUpdate(ci, run: id) { $0.done = 0.2 }
+            dbg.release(id)                                // finalizes now
+            trace.begin("no, the weather widget on the desktop")
+            trace.add(.outcome, "correction", nil); dbg.followUp("no, the weather widget on the desktop", force: true); trace.end()
+            let run = DebugRecorder.allRuns().first { $0.id == id.uuidString }
+            check(run?.verdict == "declined", "verdict declined (\(run?.verdict ?? "nil"))")
+            check(run?.nodes.contains { $0.title == "click check" } == true, "late click-check node on the right run")
+            let md = (try? String(contentsOf: DebugRecorder.runsDir.appendingPathComponent(run?.folder ?? "").appendingPathComponent("run.md"), encoding: .utf8)) ?? ""
+            check(md.contains("Verdict: declined") && md.contains("no, the weather widget"), "run.md has verdict + correction")
+            let lessons = (try? String(contentsOf: DebugRecorder.lessonsURL, encoding: .utf8)) ?? ""
+            check(lessons.contains("click the weather widget"), "lessons.jsonl has the mistake")
+            check(dbg.pastMistakes("click weather", app: nil)?.contains("WRONG") == true, "past_mistakes fed for a similar request")
+            check(!SkillStore.shared.skills.contains { $0.pattern == pattern }, "declined skill dropped")
+            let zip = DebugRecorder.export(to: URL(fileURLWithPath: NSTemporaryDirectory()))
+            check(zip != nil, "export → \(zip?.path ?? "nil")")
+            let index = (try? String(contentsOf: DebugRecorder.root.appendingPathComponent("INDEX.md"), encoding: .utf8)) ?? ""
+            check(index.contains("**declined**") && index.contains("run.md"), "INDEX.md lists the run")
+            exit(0)
+        }
+    }
+
     @MainActor private static func routeFromCLI(_ text: String) {
         let exec = CommandLine.arguments.contains("--exec")
         let text = text.replacingOccurrences(of: "--exec", with: "").trimmingCharacters(in: .whitespaces)

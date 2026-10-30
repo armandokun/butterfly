@@ -65,6 +65,8 @@ enum Planner {
         let buttons = elements.map { "\($0.label) (\($0.role.replacingOccurrences(of: "AX", with: "")))" }.prefix(80).joined(separator: " | ")
         let window = app.map { windowTitle($0) } ?? ""
         let learned = SkillStore.shared.skills.prefix(20).map { "“\($0.pattern)”" }.joined(separator: ", ")
+        let mistakes = DebugRecorder.shared.pastMistakes(request, app: app?.localizedName)
+            .map { "\nPast mistakes on similar requests (the user declined these, or the click visibly failed) — do NOT repeat them, pick a different approach:\n\($0)\n" } ?? ""
         // The app the request is about: the one named in it ("…the Slack icon…"), else the one in front.
         let named = NSWorkspace.shared.runningApplications.first { a in
             guard let n = a.localizedName, n.count > 2, a.activationPolicy == .regular else { return false }
@@ -129,7 +131,7 @@ enum Planner {
         Installed apps: \(apps)
         Menu items of the front app: \(menus.isEmpty ? "-" : menus)
         Clickable elements in the front window: \(buttons.isEmpty ? "-" : buttons)
-        \(knownBlock)\(previousBlock)
+        \(knownBlock)\(previousBlock)\(mistakes)
         Text on screen (OCR, may be noisy):
         ---
         \(screen.map { String($0.text.prefix(3500)) } ?? "-")
@@ -316,6 +318,7 @@ enum Planner {
         for (i, s) in steps.enumerated() {
             if Task.isCancelled { return Outcome(ok: false, said: said, failed: "cancelled", verified: false, created: created) }
             progress?("\(i + 1)/\(steps.count) · \(describe(s))")
+            DebugRecorder.shared.action("step \(i + 1)/\(steps.count) \(s.do): \(detail(s).prefix(160))")
             switch s.do {
             case "command":
                 guard let t = s.text?.nilIfEmpty, let run = runCommand else { continue }

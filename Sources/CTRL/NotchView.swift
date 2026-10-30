@@ -301,6 +301,12 @@ struct NotchView: View {
             Waveform(levels: model.levels)
         } else if case .system(_, let title, _) = model.phase, title.hasSuffix("…") {
             Elapsed()
+        } else if model.feedbackRun != nil {
+            HStack(spacing: 6) {
+                Button("👍") { model.feedback(true) }.buttonStyle(NotchButton(fill: .white.opacity(0.14), ink: .white)).hotspot("feedback.up") { model.feedback(true) }
+                Button("👎") { model.feedback(false) }.buttonStyle(NotchButton(fill: .white.opacity(0.14), ink: .white)).hotspot("feedback.down") { model.feedback(false) }
+            }
+            .onDisappear { NotchPanel.hotspots["feedback.up"] = nil; NotchPanel.hotspots["feedback.down"] = nil }
         }
     }
 

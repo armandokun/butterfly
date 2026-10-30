@@ -307,6 +307,15 @@ struct CommandRouter {
         }
         if !sites.isEmpty { state["web_addresses_detected"] = sites.joined(separator: ", ") }
         if !known.isEmpty { state["users_known_sites"] = known.joined(separator: ", ") }
+        if let m = DebugRecorder.shared.pastMistakes(transcript, app: front?.localizedName) {
+            state["past_mistakes"] = m
+            state["past_mistakes_note"] = "`past_mistakes`: similar requests where the user said the assistant got it wrong. Don't pick the same intent/target again for the same words."
+            DecisionTrace.shared.add(.context, "past mistakes fed to the router", m.components(separatedBy: "\n").count.description + " lessons")
+        }
+        if DebugRecorder.enabled {
+            DebugRecorder.shared.options(click: Clicker.options(elements, for: transcript, limit: 15).sorted { (Int($0.key.dropFirst()) ?? 0) < (Int($1.key.dropFirst()) ?? 0) }.map(\.value.0),
+                                         menu: menu.map { MenuReader.candidates($0.items.filter { !MenuReader.isDangerous($0) }, for: transcript, limit: 15).map(\.key) } ?? [])
+        }
 
         let asked = Date()
         if ProcessInfo.processInfo.environment["CTRL_TIMING"] == "1" { print(String(format: "  build questions %.0f ms", asked.timeIntervalSince(routeStart) * 1000)) }
