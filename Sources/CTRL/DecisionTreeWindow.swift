@@ -23,7 +23,7 @@ final class DecisionTreeWindow {
             p.hidesOnDeactivate = false
             p.isFloatingPanel = true
             p.isReleasedWhenClosed = false
-            p.contentView = NSHostingView(rootView: DebugPane(follow: true).background(Pond.paper).preferredColorScheme(.light))
+            p.contentView = NSHostingView(rootView: DebugPane(follow: true).background(Design.canvas).preferredColorScheme(.light))
             p.setFrameAutosaveName("DecisionTree")
             if !p.setFrameUsingName("DecisionTree"), let s = NSScreen.main?.visibleFrame {
                 p.setFrameOrigin(.init(x: s.maxX - 660, y: s.minY + 20))

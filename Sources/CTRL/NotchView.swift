@@ -303,8 +303,8 @@ struct NotchView: View {
             Elapsed()
         } else if model.feedbackRun != nil {
             HStack(spacing: 6) {
-                Button("👍") { model.feedback(true) }.buttonStyle(NotchButton(fill: .white.opacity(0.14), ink: .white)).hotspot("feedback.up") { model.feedback(true) }
-                Button("👎") { model.feedback(false) }.buttonStyle(NotchButton(fill: .white.opacity(0.14), ink: .white)).hotspot("feedback.down") { model.feedback(false) }
+                Button { model.feedback(true) } label: { Image(systemName: "hand.thumbsup.fill") }.buttonStyle(NotchButton(fill: .white.opacity(0.14), ink: .white, square: true)).hotspot("feedback.up") { model.feedback(true) }
+                Button { model.feedback(false) } label: { Image(systemName: "hand.thumbsdown.fill") }.buttonStyle(NotchButton(fill: .white.opacity(0.14), ink: .white, square: true)).hotspot("feedback.down") { model.feedback(false) }
             }
             .onDisappear { NotchPanel.hotspots["feedback.up"] = nil; NotchPanel.hotspots["feedback.down"] = nil }
         }
@@ -383,7 +383,7 @@ private struct MeetingPromptCard: View {
                 Circle().fill(.red).frame(width: 11, height: 11).overlay(Circle().stroke(.black, lineWidth: 2))
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text("Record this meeting?").font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
+                Text("Record this meeting?").displayText(15, color: .white)
                 Text(app).font(.system(size: 11)).foregroundStyle(.white.opacity(0.5)).lineLimit(1)
             }
             Spacer(minLength: 8)
@@ -478,7 +478,7 @@ private struct StopPromptCard: View {
         HStack(spacing: 12) {
             ButterflyMark(size: 26).frame(width: 34, height: 34)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Call ended?").font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
+                Text("Call ended?").displayText(15, color: .white)
                 TimelineView(.periodic(from: .now, by: 1)) { ctx in
                     Text(since.map { "\(app) · \(Timers.format(ctx.date.timeIntervalSince($0))) recorded" } ?? app)
                         .font(.system(size: 11).monospacedDigit()).foregroundStyle(.white.opacity(0.5)).lineLimit(1)
@@ -505,7 +505,7 @@ private struct TranscriptReadyCard: View {
         HStack(spacing: 12) {
             ButterflyMark(size: 26).frame(width: 34, height: 34)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Transcript ready").font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
+                Text("Transcript ready").displayText(15, color: .white)
                 Text(title).font(.system(size: 11)).foregroundStyle(.white.opacity(0.5)).lineLimit(1)
             }
             Spacer(minLength: 8)
@@ -530,14 +530,39 @@ private struct RecordingDot: View {
     }
 }
 
+/// The puffy pill on black: glossy top highlight, soft inner shade, hairline edge.
 private struct NotchButton: ButtonStyle {
     let fill: Color, ink: Color
+    var square = false
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 12, weight: .semibold)).foregroundStyle(ink)
-            .padding(.horizontal, 12).frame(height: 28)
-            .background(Capsule().fill(fill.opacity(configuration.isPressed ? 0.7 : 1)))
+            .font(.system(size: 12, weight: .medium)).tracking(-0.1).foregroundStyle(ink)
+            .padding(.horizontal, square ? 0 : 13).frame(width: square ? 32 : nil, height: 28)
+            .background(Capsule()
+                .fill(fill.opacity(configuration.isPressed ? 0.7 : 1)
+                    .shadow(.inner(color: .white.opacity(0.35), radius: 1, y: 1))
+                    .shadow(.inner(color: .black.opacity(0.18), radius: 3, y: -2)))
+                .overlay(Capsule().strokeBorder(.white.opacity(0.14), lineWidth: 0.5)))
             .contentShape(Capsule())
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+    }
+}
+
+/// Notch card header: squircle icon tile, serif title over a gray line.
+private struct NotchCardHeader<Icon: View, Trailing: View>: View {
+    let title: String, subtitle: String
+    @ViewBuilder var icon: () -> Icon
+    @ViewBuilder var trailing: () -> Trailing
+    var body: some View {
+        HStack(spacing: 10) {
+            icon().frame(width: 32, height: 32)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(title).displayText(16, color: .white)
+                Text(subtitle).font(.system(size: 11).monospacedDigit()).foregroundStyle(.white.opacity(0.5))
+            }
+            Spacer()
+            trailing().font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.45))
+        }
     }
 }
 
@@ -609,19 +634,14 @@ private struct RecapCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Self.gap) {
-            HStack(spacing: 10) {
+            NotchCardHeader(title: title, subtitle: range) {
                 Image(systemName: "clock.arrow.circlepath")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(LinearGradient(colors: [.purple, .orange], startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
                     .frame(width: 32, height: 32)
-                    .background(.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(title).font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
-                    Text(range).font(.system(size: 11).monospacedDigit()).foregroundStyle(.white.opacity(0.5))
-                }
-                Spacer()
+                    .background(LinearGradient(colors: [Design.violet, Design.pink], startPoint: .topLeading, endPoint: .bottomTrailing),
+                                in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            } trailing: {
                 Text("\(items.count) \(items.count == 1 ? "activity" : "activities")")
-                    .font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.45))
             }
             .frame(height: Self.header)
 
@@ -680,7 +700,7 @@ private struct AnswerCard: View {
                 Text(title).foregroundStyle(.white.opacity(0.6))
                 Spacer()
             }
-            .font(.system(size: 11, weight: .semibold))
+            .font(.system(size: 11, weight: .medium))
 
             if let rows {
                 VStack(alignment: .leading, spacing: 5) {
@@ -702,7 +722,7 @@ private struct AnswerCard: View {
                 }
             } else {
                 Text(text)
-                    .font(.system(size: 13))
+                    .font(.system(size: 13.5)).tracking(-0.15)
                     .foregroundStyle(.white.opacity(0.92))
                     .lineLimit(6)
                     .lineSpacing(2)
@@ -859,9 +879,9 @@ private struct AgendaCard: View {
                         .font(.system(size: 16, weight: .medium)).foregroundStyle(.black)
                 }
                 .frame(width: 32, height: 32)
-                .background(.white, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .background(.white, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(dayName).font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
+                    Text(dayName).displayText(16, color: .white)
                     Text(day.formatted(.dateTime.month(.wide).day())).font(.system(size: 11)).foregroundStyle(.white.opacity(0.5))
                 }
                 Spacer()

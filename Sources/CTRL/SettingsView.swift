@@ -2,28 +2,29 @@ import AppKit
 import ServiceManagement
 import SwiftUI
 
-/// CTRL → Settings… (⌘,). One fixed-size window with a flat Pond tab strip (General · Vocabulary · Routines);
+/// CTRL → Settings… (⌘,). One fixed-size window with a pill tab strip (General · Vocabulary · Routines · Skills · Screen);
 /// the title follows the pane and the last pane is restored.
 struct SettingsView: View {
     var run: (Routine) -> Void
     @AppStorage("settingsPane") private var pane = "general"
 
-    private static let panes: [(id: String, title: String, icon: String, tint: Color)] = [
-        ("general", "General", "gearshape", Pond.lime),
-        ("vocabulary", "Vocabulary", "character.book.closed", Pond.lavender),
-        ("routines", "Routines", "bolt", Pond.peach),
-        ("skills", "Skills", "brain", Pond.teal),
-        ("screen", "Screen memory", "eye", Pond.rose),
+    private static let panes: [(id: String, title: String, icon: String)] = [
+        ("general", "General", "gearshape"),
+        ("vocabulary", "Vocabulary", "character.book.closed"),
+        ("routines", "Routines", "bolt"),
+        ("skills", "Skills", "brain"),
+        ("screen", "Screen", "eye"),
     ]
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
-                ForEach(Self.panes, id: \.id) { p in PondTab(title: p.title, icon: p.icon, tint: p.tint, selected: pane == p.id) { pane = p.id } }
+                ForEach(Self.panes, id: \.id) { p in PaneTab(title: p.title, icon: p.icon, selected: pane == p.id) { pane = p.id } }
             }
-            .padding(.vertical, 10)
+            .padding(5)
+            .background(Design.mist, in: Capsule())
+            .padding(.vertical, 14)
             .frame(maxWidth: .infinity)
-            Rectangle().fill(Pond.ink.opacity(0.12)).frame(height: 1)
             Group {
                 switch pane {
                 case "vocabulary": VocabularyPane()
@@ -35,37 +36,52 @@ struct SettingsView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .frame(width: 620, height: 600)
-        .background(Pond.paper)
+        .frame(width: 640, height: 660)
+        .background(Design.canvas)
         .navigationTitle(Self.panes.first { $0.id == pane }?.title ?? "Settings")
-        .toolbarBackground(Pond.paper, for: .windowToolbar)
+        .toolbarBackground(Design.canvas, for: .windowToolbar)
         .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
-        .tint(Pond.ink)
-        .accentColor(Pond.ink)
+        .tint(Design.ink)
+        .accentColor(Design.ink)
         .preferredColorScheme(.light)
     }
 }
 
-/// Settings pane switcher: flat square block, ink glyph over a mono label; the selected pane is filled with its color.
-private struct PondTab: View {
-    let title: String, icon: String, tint: Color, selected: Bool
+/// Settings pane switcher: segments on a gray capsule; the selected one is a puffy white pill.
+private struct PaneTab: View {
+    let title: String, icon: String, selected: Bool
     let action: () -> Void
     @State private var hover = false
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 4) {
-                Image(systemName: icon).font(.system(size: 17, weight: .regular)).symbolRenderingMode(.monochrome)
-                    .frame(height: 20)
-                Text(title.uppercased()).font(.system(size: 9.5, weight: .medium, design: .monospaced)).tracking(0.6)
-            }
-            .foregroundStyle(Pond.ink.opacity(selected ? 1 : 0.62))
-            .frame(width: 92, height: 50)
-            .background(selected ? tint : (hover ? Pond.ink.opacity(0.06) : .clear))
-            .contentShape(Rectangle())
+            Label(title, systemImage: icon)
+                .font(.system(size: 12.5, weight: .medium)).tracking(-0.1)
+                .foregroundStyle(selected ? Design.ink : Design.secondary.opacity(hover ? 1 : 0.85))
+                .padding(.horizontal, 14).frame(height: 30)
+                .background {
+                    if selected {
+                        Capsule().fill(.white).shadow(color: .black.opacity(0.08), radius: 1.5, y: 1).shadow(color: .black.opacity(0.05), radius: 8, y: 4)
+                    }
+                }
+                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
-        .animation(.easeOut(duration: 0.12), value: selected)
+        .animation(.snappy(duration: 0.18), value: selected)
+    }
+}
+
+/// Page header: editorial serif title and a gray line under it, centered.
+private struct PageTitle: View {
+    let title: String
+    var subtitle: String? = nil
+    var body: some View {
+        VStack(spacing: 6) {
+            Text(title).displayText(32)
+            if let subtitle { Text(subtitle).secondaryText(.system(size: 14)).multilineTextAlignment(.center) }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 6).padding(.bottom, 4)
     }
 }
 
@@ -86,37 +102,39 @@ private struct GeneralPane: View {
     @State private var mics = AudioInput.devices
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(alignment: .center, spacing: 16) {
+        VStack(alignment: .leading, spacing: Design.section) {
+            VStack(spacing: 18) {
                 if let art = Bundle.main.image(forResource: "mark") {
-                    Image(nsImage: art).resizable().scaledToFit().frame(width: 88, height: 88)
+                    Image(nsImage: art).resizable().scaledToFit().frame(width: 64, height: 64)
                 }
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("A faithful computer").font(Pond.display(26)).foregroundStyle(Pond.ink)
-                    HStack(spacing: 0) {
-                        PondChip(text: "Hold ⌥", fill: Pond.lavender)
-                        PondChip(text: "and speak", fill: Pond.lime)
-                    }
+                PageTitle(title: "A faithful computer", subtitle: "Hold ⌥ and speak. Butterfly does the rest.")
+                HStack(spacing: 10) {
+                    WidgetTile(title: "Speak", symbol: "waveform", caption: "Hold ⌥", tint: Design.pink)
+                    WidgetTile(title: "Meetings", symbol: "video.fill", caption: recordMeetings ? "Asks to record" : "Off", tint: Design.sky)
+                    WidgetTile(title: "Routines", symbol: "bolt.fill", caption: "One phrase", tint: Design.orange)
+                    WidgetTile(title: "Memory", symbol: "eye.fill", caption: ScreenMemory.shared.enabled ? "On" : "Off", tint: Design.slate)
+                    WidgetTile(title: "Keys", symbol: hasKey ? "checkmark.seal.fill" : "key.fill", caption: hasKey ? "Saved" : "Add a key", tint: Design.green, filled: false)
                 }
             }
+            .frame(maxWidth: .infinity)
 
-            PondSection(title: "TypeSafe", tint: Pond.lavender, footer: "Stored in your Keychain. Get one at typesafe.ai.") {
-                PondRow(title: "API key", last: true) {
+            CardSection(title: "TypeSafe", footer: "Stored in your Keychain. Get one at typesafe.ai.") {
+                CardRow(title: "API key", last: true) {
                     HStack(spacing: 6) {
-                        PondField(prompt: hasKey ? "Saved in Keychain" : "apikey_…", text: $key, secure: true).frame(width: 200)
+                        SoftField(prompt: hasKey ? "Saved in Keychain" : "apikey_…", text: $key, secure: true).frame(width: 200)
                         Button("Save") {
                             Keychain.save(key.trimmingCharacters(in: .whitespacesAndNewlines))
                             key = ""; hasKey = true
                         }
-                        .buttonStyle(.pond(Pond.lime))
+                        .buttonStyle(.puffyInk)
                         .disabled(key.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
                 }
             }
 
-            PondSection(title: "Microphone", tint: Pond.peach,
+            CardSection(title: "Microphone",
                         footer: "Automatic uses your Mac's input, and an external mic (like a Studio Display) when the lid is closed.") {
-                PondRow(title: "Listen with", last: true) {
+                CardRow(title: "Listen with", last: true) {
                     Picker("", selection: $mic) {
                         Text("Automatic · \(AudioInput.chosen.map(\.name) ?? "none")").tag("")
                         ForEach(mics) { Text($0.name).tag($0.uid) }
@@ -126,75 +144,75 @@ private struct GeneralPane: View {
                 }
             }
 
-            PondSection(title: "Meetings", tint: Pond.lime,
+            CardSection(title: "Meetings",
                         footer: "When Zoom, Teams, Meet, Slack or FaceTime start a call, the notch asks to record it (the call and your mic). Gemini writes the transcript (Lithuanian and English). Saved in Documents › Butterfly Meetings.") {
-                PondRow(title: "Ask to record when a call starts") {
-                    Toggle("", isOn: $recordMeetings).labelsHidden().toggleStyle(.switch).tint(Pond.moss)
+                CardRow(title: "Ask to record when a call starts") {
+                    InkToggle(isOn: $recordMeetings)
                 }
-                PondRow(title: "Gemini API key") {
+                CardRow(title: "Gemini API key") {
                     HStack(spacing: 6) {
-                        PondField(prompt: hasGemini ? "Saved in Keychain" : "AIza…", text: $gemini, secure: true).frame(width: 200)
+                        SoftField(prompt: hasGemini ? "Saved in Keychain" : "AIza…", text: $gemini, secure: true).frame(width: 200)
                         Button("Save") {
                             Keychain.saveGemini(gemini.trimmingCharacters(in: .whitespacesAndNewlines))
                             gemini = ""; hasGemini = true
                         }
-                        .buttonStyle(.pond(Pond.lime))
+                        .buttonStyle(.puffyInk)
                         .disabled(gemini.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
                 }
-                PondRow(title: "Meeting notes", last: true) {
+                CardRow(title: "Meeting notes", last: true) {
                     HStack(spacing: 6) {
-                        Button("Transcribe last") { Meetings.shared.retranscribeLast() }.buttonStyle(.pond(Pond.peach))
-                        Button("Open folder") { Meetings.openFolder() }.buttonStyle(.pond(Pond.teal))
+                        Button("Transcribe last") { Meetings.shared.retranscribeLast() }.buttonStyle(.puffy)
+                        Button("Open folder") { Meetings.openFolder() }.buttonStyle(.puffy)
                     }
                 }
             }
 
-            PondSection(title: "System", tint: Pond.teal) {
-                PondRow(title: "Sounds when listening starts and stops") {
-                    Toggle("", isOn: $sounds).labelsHidden().toggleStyle(.switch).tint(Pond.moss)
+            CardSection(title: "System") {
+                CardRow(title: "Sounds when listening starts and stops") {
+                    InkToggle(isOn: $sounds)
                         .onChange(of: sounds) { if sounds { Cues.listening() } }
                 }
-                PondRow(title: "Lower music while listening") {
-                    Toggle("", isOn: $duck).labelsHidden().toggleStyle(.switch).tint(Pond.moss)
+                CardRow(title: "Lower music while listening") {
+                    InkToggle(isOn: $duck)
                 }
-                PondRow(title: "Open at login") {
-                    Toggle("", isOn: $login).labelsHidden().toggleStyle(.switch).tint(Pond.moss)
+                CardRow(title: "Open at login") {
+                    InkToggle(isOn: $login)
                         .onChange(of: login) { LoginItem.set(login); login = LoginItem.enabled }
                 }
-                PondRow(title: "Accessibility") {
-                    if trusted { PondChip(text: "● Allowed", fill: Pond.lime) }
+                CardRow(title: "Accessibility") {
+                    if trusted { Tag(text: "Allowed", tint: Design.green) }
                     else {
                         Button("Open System Settings") {
                             NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
                         }
-                        .buttonStyle(.pond(Pond.peach))
+                        .buttonStyle(.puffy)
                     }
                 }
-                PondRow(title: "\(appCount) apps found") {
+                CardRow(title: "\(appCount) apps found") {
                     Button("Rescan") { AppCatalog.shared.reload(); appCount = AppCatalog.shared.apps.count }
-                        .buttonStyle(.pond(Pond.teal))
+                        .buttonStyle(.puffy)
                 }
-                PondRow(title: "Developer mode", last: !developer) {
-                    Toggle("", isOn: $developer).labelsHidden().toggleStyle(.switch).tint(Pond.moss)
+                CardRow(title: "Developer mode", last: !developer) {
+                    InkToggle(isOn: $developer)
                 }
                 if developer {
-                    PondRow(title: "Debug logs · \(exported ?? "every command recorded")", last: true) {
+                    CardRow(title: "Debug logs · \(exported ?? "every command recorded")", last: true) {
                         HStack(spacing: 6) {
-                            Button("Reveal logs") { DebugRecorder.reveal() }.buttonStyle(.pond(Pond.teal))
+                            Button("Reveal logs") { DebugRecorder.reveal() }.buttonStyle(.puffy)
                             Button("Export debug logs") {
                                 if let zip = DebugRecorder.export() { exported = "saved to Desktop"; NSWorkspace.shared.activateFileViewerSelecting([zip]) } else { exported = "export failed" }
                             }
-                            .buttonStyle(.pond(Pond.lime))
+                            .buttonStyle(.puffy)
                         }
                     }
                 }
             }
             if LoginItem.needsApproval {
-                Button("Allow Butterfly in Login Items") { SMAppService.openSystemSettingsLoginItems() }.buttonStyle(.pond(Pond.peach))
+                Button("Allow Butterfly in Login Items") { SMAppService.openSystemSettingsLoginItems() }.buttonStyle(.puffy)
             }
         }
-        .padding(20)
+        .padding(Design.margin)
         .onAppear { trusted = HotkeyMonitor.hasAccessibility; appCount = AppCatalog.shared.apps.count; login = LoginItem.enabled; mics = AudioInput.devices }
     }
 }
@@ -206,36 +224,33 @@ private struct VocabularyPane: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                Text("Words Butterfly should hear right")
-                    .font(Pond.display(26)).foregroundStyle(Pond.ink)
-                    .padding(.horizontal, 8).background(Pond.lime)
-                PondSection(title: "Vocabulary", tint: Pond.peach,
+            VStack(alignment: .leading, spacing: Design.section) {
+                PageTitle(title: "Words Butterfly should hear right")
+                CardSection(title: "Vocabulary",
                             footer: "Names and web addresses, like “openmail.sh” or a colleague's name.") {
                     ForEach($words) { $w in
                         VStack(spacing: 0) {
                             HStack {
                                 TextField("", text: $w.text, prompt: Text("openmail.sh"))
-                                    .textFieldStyle(.plain).font(Pond.body).foregroundStyle(Pond.ink)
+                                    .textFieldStyle(.plain).font(Design.body).foregroundStyle(Design.ink)
                                     .focused($focused, equals: w.id)
                                     .onSubmit { add(after: w.id) }
-                                Button("−") { words.removeAll { $0.id == w.id } }.buttonStyle(.pond(Pond.rose)).help("Remove")
+                                Button(role: .destructive) { words.removeAll { $0.id == w.id } } label: { Image(systemName: "minus") }.buttonStyle(.puffy).help("Remove")
                             }
-                            .padding(.horizontal, 12).padding(.vertical, 7)
-                            Rectangle().fill(Pond.ink.opacity(0.08)).frame(height: 1)
+                            .padding(.horizontal, Design.pad).padding(.vertical, 9)
+                            Rectangle().fill(Design.hairline).frame(height: 1)
                         }
                     }
                     HStack {
-                        Button("+ Add word") { add(after: words.last?.id) }.buttonStyle(.pond(Pond.peach))
+                        Button { add(after: words.last?.id) } label: { Label("Add word", systemImage: "plus") }.buttonStyle(.puffy)
                         Spacer()
                     }
-                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .padding(.horizontal, Design.pad).padding(.vertical, 12)
                 }
             }
-            .padding(20)
+            .padding(Design.margin)
         }
-        .frame(height: 380)
-        .onChange(of: words) { Vocabulary.save(words.map(\.text)) }
+                .onChange(of: words) { Vocabulary.save(words.map(\.text)) }
     }
 
     private func add(after id: Word.ID?) {
@@ -246,29 +261,30 @@ private struct VocabularyPane: View {
     }
 }
 
-/// Routine list on the left (numbered, Pond chips), editor on the right.
+/// Routine list on the left (numbered tiles) in a light gray frame, editor on the right.
 private struct RoutinesPane: View {
     @ObservedObject var store: RoutineStore
     var run: (Routine) -> Void
     @State private var selection: Routine.ID?
-    private let tints = [Pond.lavender, Pond.lime, Pond.peach, Pond.teal, Pond.rose]
+    private let tints = [Design.violet, Design.green, Design.orange, Design.sky, Design.pink]
 
     var body: some View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
-                PondChip(text: "Routines", fill: Pond.ink, ink: Pond.lime)
+                Text("Routines").titleText(22).padding(.leading, 6)
                 ScrollView {
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(Array(store.routines.enumerated()), id: \.element.id) { i, r in
                             Button { selection = r.id } label: {
                                 HStack(spacing: 6) {
-                                    Text("\(i + 1)").font(Pond.label).frame(width: 18, height: 18).background(tints[i % tints.count])
-                                    Text(r.name.isEmpty ? "Untitled" : r.name).font(Pond.body)
+                                    Text("\(i + 1)").font(Design.label).foregroundStyle(.white).frame(width: 22, height: 22)
+                                        .background(tints[i % tints.count], in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                                    Text(r.name.isEmpty ? "Untitled" : r.name).font(Design.body)
                                     Spacer()
                                 }
-                                .foregroundStyle(Pond.ink)
-                                .padding(4)
-                                .background(selection == r.id ? Pond.lime.opacity(0.6) : .clear)
+                                .foregroundStyle(Design.ink)
+                                .padding(6)
+                                .background { if selection == r.id { RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.white).shadow(color: .black.opacity(0.06), radius: 6, y: 3) } }
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
@@ -276,27 +292,27 @@ private struct RoutinesPane: View {
                     }
                 }
                 HStack(spacing: 4) {
-                    Button("+") { add() }.buttonStyle(.pond(Pond.teal)).help("New routine")
-                    Button("−") { remove() }.buttonStyle(.pond(Pond.rose)).disabled(selection == nil).help("Delete routine")
+                    Button { add() } label: { Image(systemName: "plus") }.buttonStyle(.puffy).help("New routine")
+                    Button(role: .destructive) { remove() } label: { Image(systemName: "minus") }.buttonStyle(.puffy).disabled(selection == nil).help("Delete routine")
                 }
             }
-            .frame(width: 160)
+            .padding(12)
+            .frame(width: 180)
+            .background(Design.mist, in: RoundedRectangle(cornerRadius: Design.radius, style: .continuous))
             .padding([.leading, .vertical], 20)
-
-            Rectangle().fill(Pond.ink.opacity(0.1)).frame(width: 1).padding(.vertical, 20).padding(.leading, 16)
 
             if let i = store.routines.firstIndex(where: { $0.id == selection }) {
                 RoutineEditor(routine: $store.routines[i], run: run).id(store.routines[i].id)
             } else {
                 VStack(spacing: 10) {
-                    Text("No routine yet").font(Pond.display(24)).foregroundStyle(Pond.ink)
-                    Text("One phrase runs several commands, like “work mode”.").font(Pond.body).foregroundStyle(Pond.ink.opacity(0.6))
-                    Button("+ New routine") { add() }.buttonStyle(.pond(Pond.lime))
+                    Text("No routine yet").displayText(24)
+                    Text("One phrase runs several commands, like “work mode”.").secondaryText(.system(size: 14))
+                    Button { add() } label: { Label("New routine", systemImage: "plus") }.buttonStyle(.puffyInk)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .frame(height: 420)
+        .frame(maxHeight: .infinity)
         .onAppear { if selection == nil { selection = store.routines.first?.id } }
     }
 
@@ -319,40 +335,38 @@ private struct SkillsPane: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                Text("Things Butterfly learned")
-                    .font(Pond.display(26)).foregroundStyle(Pond.ink)
-                    .padding(.horizontal, 8).background(Pond.teal)
+            VStack(alignment: .leading, spacing: Design.section) {
+                PageTitle(title: "Things Butterfly learned")
                 if store.skills.isEmpty {
                     Text("Nothing yet. The first time a request needs working out, the finished plan is kept here and runs instantly next time.")
-                        .font(Pond.body).foregroundStyle(Pond.ink.opacity(0.6))
+                        .secondaryText(.system(size: 14))
                 } else {
-                    PondSection(title: "\(store.skills.count) skills", tint: Pond.teal, footer: "Patterns with {slots} match what you say; the steps run without any model call.") {
+                    CardSection(title: "\(store.skills.count) skills", footer: "Patterns with {slots} match what you say; the steps run without any model call.") {
                         ForEach(store.skills.sorted { $0.lastUsed > $1.lastUsed }) { s in
                             VStack(spacing: 0) {
                                 HStack(alignment: .top, spacing: 10) {
                                     VStack(alignment: .leading, spacing: 3) {
-                                        Text(s.name).font(Pond.body.weight(.medium)).foregroundStyle(Pond.ink)
-                                        Text("“\(s.pattern)”").font(Pond.body).foregroundStyle(Pond.ink.opacity(0.75))
-                                        Text(s.steps.map(Planner.describe).joined(separator: " → ")).font(Pond.label).foregroundStyle(Pond.ink.opacity(0.5)).lineLimit(2)
-                                        Text("\(s.uses) \(s.uses == 1 ? "use" : "uses") · last \(s.lastUsed.formatted(.relative(presentation: .named)))").font(Pond.label).foregroundStyle(Pond.ink.opacity(0.5))
+                                        Text(s.name).font(Design.body.weight(.medium)).foregroundStyle(Design.ink)
+                                        Text("“\(s.pattern)”").font(Design.body).foregroundStyle(Design.ink.opacity(0.8))
+                                        Text(s.steps.map(Planner.describe).joined(separator: " → ")).font(Design.label).foregroundStyle(Design.secondary).lineLimit(2)
+                                        Text("\(s.uses) \(s.uses == 1 ? "use" : "uses") · last \(s.lastUsed.formatted(.relative(presentation: .named)))").font(Design.label).foregroundStyle(Design.secondary)
                                     }
                                     Spacer()
-                                    Button("Forget") { store.forget(s) }.buttonStyle(.pond(Pond.rose))
+                                    Button("Forget", role: .destructive) { store.forget(s) }.buttonStyle(.puffy)
                                 }
-                                .padding(.horizontal, 12).padding(.vertical, 8)
-                                Rectangle().fill(Pond.ink.opacity(0.08)).frame(height: 1)
+                                .padding(.horizontal, Design.pad).padding(.vertical, 12)
+                                Rectangle().fill(Design.hairline).frame(height: 1)
                             }
                         }
                         HStack {
                             Spacer()
-                            Button("Forget all") { store.forgetAll() }.buttonStyle(.pond(Pond.rose))
+                            Button("Forget all", role: .destructive) { store.forgetAll() }.buttonStyle(.puffy)
                         }
-                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .padding(.horizontal, Design.pad).padding(.vertical, 12)
                     }
                 }
             }
-            .padding(20)
+            .padding(Design.margin)
         }
     }
 }
@@ -368,43 +382,41 @@ private struct ScreenMemoryPane: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                Text("What was on your screen")
-                    .font(Pond.display(26)).foregroundStyle(Pond.ink)
-                    .padding(.horizontal, 8).background(Pond.rose)
-                PondSection(title: "Screen memory", tint: Pond.rose,
+            VStack(alignment: .leading, spacing: Design.section) {
+                PageTitle(title: "What was on your screen")
+                CardSection(title: "Screen memory",
                             footer: "Every few seconds the front window is read (on-device OCR) and kept with its time and app, so you can ask “what was the price I saw on Stride?” or “what did I do in the last hour?”. Text stays 30 days, frames 7 days, encrypted with a key in your Keychain. Nothing leaves the Mac until you ask about it.") {
-                    PondRow(title: "Remember my screen") {
-                        Toggle("", isOn: $enabled).labelsHidden().toggleStyle(.switch).tint(Pond.moss)
+                    CardRow(title: "Remember my screen") {
+                        InkToggle(isOn: $enabled)
                             .onChange(of: enabled) { ScreenMemory.shared.enabled = enabled }
                     }
-                    PondRow(title: "\(count) screens · \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))", last: true) {
-                        Button("Forget history") { ScreenMemory.shared.forgetAll(); refresh() }.buttonStyle(.pond(Pond.rose))
+                    CardRow(title: "\(count) screens · \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))", last: true) {
+                        Button("Forget history", role: .destructive) { ScreenMemory.shared.forgetAll(); refresh() }.buttonStyle(.puffy)
                     }
                 }
-                PondSection(title: "Never read these apps", tint: Pond.lavender,
+                CardSection(title: "Never read these apps",
                             footer: "Password managers, banks and private chats are skipped by default. Private and incognito browser windows are always skipped.") {
                     ForEach(excluded, id: \.self) { name in
                         VStack(spacing: 0) {
                             HStack {
-                                Text(name).font(Pond.body).foregroundStyle(Pond.ink)
+                                Text(name).font(Design.body).foregroundStyle(Design.ink)
                                 Spacer()
-                                Button("−") { excluded.removeAll { $0 == name } }.buttonStyle(.pond(Pond.rose)).help("Remove")
+                                Button(role: .destructive) { excluded.removeAll { $0 == name } } label: { Image(systemName: "minus") }.buttonStyle(.puffy).help("Remove")
                             }
-                            .padding(.horizontal, 12).padding(.vertical, 7)
-                            Rectangle().fill(Pond.ink.opacity(0.08)).frame(height: 1)
+                            .padding(.horizontal, Design.pad).padding(.vertical, 9)
+                            Rectangle().fill(Design.hairline).frame(height: 1)
                         }
                     }
                     HStack(spacing: 6) {
-                        PondField(prompt: "App name", text: $newApp).frame(width: 220).focused($adding).onSubmit(add)
-                        Button("+ Add") { add() }.buttonStyle(.pond(Pond.lavender)).disabled(newApp.trimmingCharacters(in: .whitespaces).isEmpty)
+                        SoftField(prompt: "App name", text: $newApp).frame(width: 220).focused($adding).onSubmit(add)
+                        Button { add() } label: { Label("Add", systemImage: "plus") }.buttonStyle(.puffy).disabled(newApp.trimmingCharacters(in: .whitespaces).isEmpty)
                         Spacer()
-                        Button("Reset to defaults") { excluded = ScreenMemory.defaultExcluded }.buttonStyle(.pond(Pond.teal))
+                        Button("Reset to defaults") { excluded = ScreenMemory.defaultExcluded }.buttonStyle(.puffy)
                     }
-                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .padding(.horizontal, Design.pad).padding(.vertical, 12)
                 }
             }
-            .padding(20)
+            .padding(Design.margin)
         }
         .onChange(of: excluded) { ScreenMemory.excludedApps = excluded }
         .onAppear(perform: refresh)
