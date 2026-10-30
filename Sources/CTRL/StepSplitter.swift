@@ -36,11 +36,22 @@ enum StepSplitter {
         let steps = r.content.steps.map { $0.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "\"“”."))) }.filter { $0.count > 2 }
         guard (1...5).contains(steps.count) else { return nil }
         // The model's words only when it actually split something; a single command keeps your exact phrasing.
-        return steps.count == 1 ? [t] : steps
+        if steps.count == 1 { return [t] }
+        // It may add words ("in Notes") but must not lose any you said ("open notes…" → "create a new note" dropped "open").
+        return covers(steps, t) ? steps : nil
+    }
+
+    /// Joining and pointing words the split is allowed to drop or replace.
+    private static let droppable: Set<String> = ["and", "then", "after", "that", "afterwards", "also", "once", "you're", "youre", "you", "are", "there",
+                                                 "it", "this", "one", "the", "a", "an", "please", "ok", "okay", "um", "uh", "great", "thanks", "thank", "ir", "tada", "po", "to"]
+    private static func covers(_ steps: [String], _ original: String) -> Bool {
+        func words(_ s: String) -> [String] { s.lowercased().split { !$0.isLetter && !$0.isNumber && $0 != "'" }.map(String.init) }
+        let out = Set(steps.flatMap(words))
+        return words(original).allSatisfy { w in droppable.contains(w) || out.contains(w) || (w.count > 3 && out.contains { $0.hasPrefix(w.prefix(4)) }) }
     }
 
     private static func heuristic(_ t: String) -> [String] {
-        let parts: [String] = t.split(separator: #/,?\s+(?:and then|then|after that|afterwards|and once you're there,?|once you're there,?|and also)\s+/#)
+        let parts: [String] = t.split(separator: #/,?\s+(?:and then|then|after that|afterwards|and once you're there,?|once you're there,?|and also|ir tada|tada|po to)\s+|,?\s+and\s+(?=(?:open|close|create|make|go|type|write|search|take|play|send|put|click|turn|set|switch|show|start|stop|add|remove|move|find|press|scroll)\b)/#.ignoresCase())
             .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         return parts.count > 1 ? parts : [t]
     }
