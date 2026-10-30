@@ -100,6 +100,7 @@ enum Clicker {
     }
 
     static func press(_ e: Element) {
+        RunVideo.shared.ring(at: CGPoint(x: e.frame.midX, y: e.frame.midY))
         let actions: [String] = {
             var names: CFArray?
             AXUIElementCopyActionNames(e.element, &names)
@@ -263,6 +264,7 @@ enum Clicker {
 
     /// Real mouse click at a global (top-left origin) point; puts the cursor back afterwards.
     static func click(at p: CGPoint) {
+        RunVideo.shared.ring(at: p)
         let back = CGEvent(source: nil)?.location
         let src = CGEventSource(stateID: .hidSystemState)
         CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: p, mouseButton: .left)?.post(tap: .cghidEventTap)

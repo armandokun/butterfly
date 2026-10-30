@@ -40,6 +40,8 @@ final class DebugRecorder {
         var correction: String?
         var skillPattern: String?
         var lessoned = false
+        var video: String?                // video.mp4: the screen from ⌥ down to 2 s after the action, captions burned in
+        var contactSheet: String?
     }
     struct Lesson: Codable { var said: String; var app: String?; var did: String; var why: String; var at: Date }
 
@@ -60,6 +62,7 @@ final class DebugRecorder {
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd_HH-mm-ss"
         records[id] = Record(id: id.uuidString, folder: "\(f.string(from: Date()))_\(id.uuidString.prefix(8).lowercased())", start: Date(), said: said)
         order.append(id)
+        RunVideo.shared.attach(id, folder: Self.runsDir.appendingPathComponent(records[id]!.folder), said: said)
         // Only the last few minutes stay in memory (corrections attach to them); the rest lives on disk.
         while order.count > 30, let old = order.first { order.removeFirst(); records[old] = nil; ended.remove(old) }
     }
@@ -70,6 +73,7 @@ final class DebugRecorder {
                             version: app?.bundleURL.flatMap { Bundle(url: $0)?.infoDictionary?["CFBundleShortVersionString"] as? String })
             r.context = summary
         }
+        if let name = app?.localizedName, ScreenMemory.isExcluded(name) { RunVideo.shared.discard() }   // private app: no video
     }
 
     /// The ranked click / menu options the router offered the model (top 15 each).
@@ -85,6 +89,7 @@ final class DebugRecorder {
             let at = ms(r)
             func conv(_ n: DecisionTrace.Node) -> Node { Node(kind: n.kind.rawValue, title: n.title, detail: n.detail, ms: n.ms, p: n.p, at: at, children: n.children.map(conv)) }
             r.nodes.append(conv(n))
+            RunVideo.shared.caption(n.title + (n.detail.map { " — \($0)" } ?? ""))
             if n.kind == .outcome { r.outcome = n.title }
             if n.kind == .error { r.errors.append(n.title + (n.detail.map { " — \($0)" } ?? "")) }
         }
@@ -92,6 +97,7 @@ final class DebugRecorder {
 
     func action(_ text: String, run id: UUID? = nil) {
         update(id) { r in r.actions.append("+\(ms(r)) ms · \(text)") }
+        RunVideo.shared.caption(text)
     }
 
     func skill(_ pattern: String?, run id: UUID? = nil) {
@@ -145,6 +151,7 @@ final class DebugRecorder {
         r.end = Date()
         r.latencyMs = r.latencyMs.map { max($0, ms(r)) } ?? ms(r)
         records[id] = r
+        RunVideo.shared.finished(id, outcome: r.outcome)
         if r.verdict == "unknown", !r.errors.isEmpty { return verdict("failed", by: "error: \(r.errors[0])", run: id) }
         write(r)
         prune()
@@ -185,6 +192,11 @@ final class DebugRecorder {
         let repeated = norm(said) == norm(r.said) && !(r.outcome ?? "").contains(#/(?i)volume|brightness|scroll|next|previous|press|media/#)
         guard force || corrects || repeated else { return }
         verdict("declined", by: repeated && !corrects && !force ? "repeated the same request" : "voice correction", correction: said, run: id)
+    }
+
+    /// The run's video finished encoding (after the run ended).
+    func attachVideo(_ id: UUID, video: String, sheet: String?) {
+        update(id) { r in r.video = video; r.contactSheet = sheet }
     }
 
     // MARK: Lessons (self-improvement)
@@ -270,6 +282,10 @@ final class DebugRecorder {
                 o += c.shots.map { " · [\($0)](\($0))" }.joined() + "\n"
             }
         }
+        if let v = r.video {
+            o += "\n## Video\n\nScreen from ⌥ down until 2 s after the action; captions show what was said and each decision as it happened, yellow rings mark clicks.\n\n"
+            o += "- [\(v)](\(v))\n" + (r.contactSheet.map { "- Contact sheet (12 frames, time + caption): [\($0)](\($0))\n\n![contact sheet](\($0))\n" } ?? "")
+        }
         if !r.clickOptions.isEmpty { o += "\n## Click options shown to the model (ranked)\n\n" + r.clickOptions.map { "- \($0)\n" }.joined() }
         if !r.menuOptions.isEmpty { o += "\n## Menu options shown to the model (ranked)\n\n" + r.menuOptions.map { "- \($0)\n" }.joined() }
         if !r.errors.isEmpty { o += "\n## Errors\n\n" + r.errors.map { "- \($0)\n" }.joined() }
@@ -296,9 +312,9 @@ final class DebugRecorder {
         var md = "# Butterfly debug logs\n\nFor an AI coding agent: each row is one voice command. Start with failed/declined runs; open its run.md "
         md += "(what was said, what was decided and why, what happened, the verdict and the user's correction). lessons.jsonl lists every mistake.\n\n"
         md += "\(runs.count) runs · \(runs.filter { $0.verdict == "failed" }.count) failed · \(runs.filter { $0.verdict == "declined" }.count) declined · \(shared.lessons.count) lessons\n\n"
-        md += "| When | Said | App | Outcome | Verdict | Run |\n|---|---|---|---|---|---|\n"
+        md += "| When | Said | App | Outcome | Verdict | Run | Video |\n|---|---|---|---|---|---|---|\n"
         for r in sorted {
-            md += "| \(r.start.formatted(date: .numeric, time: .shortened)) | \(cell(r.said)) | \(cell(r.app.name ?? "?")) | \(cell(r.outcome ?? "—")) | **\(r.verdict)**\(r.correction.map { " “\(cell($0))”" } ?? "") | [run.md](runs/\(r.folder)/run.md) |\n"
+            md += "| \(r.start.formatted(date: .numeric, time: .shortened)) | \(cell(r.said)) | \(cell(r.app.name ?? "?")) | \(cell(r.outcome ?? "—")) | **\(r.verdict)**\(r.correction.map { " “\(cell($0))”" } ?? "") | [run.md](runs/\(r.folder)/run.md) | \(r.video.map { "[mp4](runs/\(r.folder)/\($0))" } ?? "")\(r.contactSheet.map { " · [sheet](runs/\(r.folder)/\($0))" } ?? "") |\n"
         }
         try? md.write(to: root.appendingPathComponent("INDEX.md"), atomically: true, encoding: .utf8)
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd_HH-mm"

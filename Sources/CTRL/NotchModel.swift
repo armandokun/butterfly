@@ -454,6 +454,7 @@ final class NotchModel: ObservableObject {
         levels = levels.map { _ in 0 }
         phase = .listening
         if !dictation { MarkGesture.shared.enabled = true }   // while you hold ⌥ you can press-hold-drag to mark something
+        if !dictation { RunVideo.shared.start() }   // developer mode: a video of this command
         Cues.listening()
         Ducker.duck()
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
@@ -640,12 +641,14 @@ final class NotchModel: ObservableObject {
             }
             guard !text.isEmpty else {
                 MarkGesture.shared.enabled = false
+                RunVideo.shared.discard()
                 // Total silence = wrong or muted mic, not a quiet voice: say which one, and where to change it.
                 if silent { return show(.system(symbol: "mic.slash", title: "Heard nothing", detail: "Using \(recorder.micName ?? "no microphone") · change it in Settings"), for: 3) }
                 return close()
             }
             if dictationOnly {
                 dictationOnly = false
+                RunVideo.shared.discard()
                 close()
                 frontApp?.activate()
                 try? await Task.sleep(for: .milliseconds(80))
@@ -678,6 +681,7 @@ final class NotchModel: ObservableObject {
         dictationOnly = false
         MarkGesture.shared.enabled = false
         if MarkOverlay.shared.hasMarks { MarkOverlay.shared.cancel() }
+        RunVideo.shared.discard()
         Task {
             await startTask?.value
             await recorder.cancel()

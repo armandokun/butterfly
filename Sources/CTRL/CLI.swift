@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import EventKit
 import SwiftUI
 
@@ -58,6 +59,32 @@ enum CLI {
             exit(0)
         }
         if args.contains("--debug-selftest") { debugSelftest(); return true }
+        // `--video-selftest`: 4 s of the main display with fake captions + a click ring → mp4 + contact sheet in a temp dir.
+        if args.contains("--video-selftest") {
+            Task { @MainActor in
+                let dir = FileManager.default.temporaryDirectory.appendingPathComponent("butterfly-video-selftest")
+                try? FileManager.default.removeItem(at: dir)
+                try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                let s = RunVideo.Session(display: CGMainDisplayID(), url: dir.appendingPathComponent("video.mp4"))
+                do { try await s.start() } catch { print("start failed:", error); exit(1) }
+                let b = CGDisplayBounds(CGMainDisplayID())
+                s.caption("“click the weather widget”", query: true)
+                for (i, c) in ["Model answered 24 questions", "click(Weather)", "click check — done 0.20", "click check (retry) — done 0.90"].enumerated() {
+                    try? await Task.sleep(for: .seconds(1))
+                    s.caption(c)
+                    if i == 1 { s.ring(CGPoint(x: b.midX, y: b.midY)) }
+                }
+                guard let url = await s.finish() else { print("no video written"); exit(1) }
+                let sheet = dir.appendingPathComponent("contact-sheet.jpg")
+                let ok = await RunVideo.contactSheet(url, captions: s.timeline, to: sheet)
+                let size = { (u: URL) in ByteCountFormatter.string(fromByteCount: Int64((try? FileManager.default.attributesOfItem(atPath: u.path)[.size] as? Int) ?? 0), countStyle: .file) }
+                let dur = (try? await AVURLAsset(url: url).load(.duration).seconds) ?? 0
+                print("video:", url.path, size(url), String(format: "%.1f s", dur), "\(s.width)×\(s.height)")
+                print("sheet:", ok ? "\(sheet.path) \(size(sheet))" : "failed")
+                exit(ok ? 0 : 1)
+            }
+            return true
+        }
         // `--meeting-apps`: which processes use a mic right now (meeting detection).
         if args.contains("--meeting-apps") { print(Meetings.micUsers()); exit(0) }
         // `--memory-test 15`: runs screen memory for N seconds and prints what it captured (debugging).
