@@ -39,49 +39,58 @@ extension View {
     func secondaryText(_ font: Font = Design.caption) -> some View {
         self.font(font).tracking(-0.1).lineSpacing(3).foregroundStyle(Design.secondary)
     }
-    /// White (or tinted) squircle with a glossy white edge and soft layered shadows.
-    func softCard(_ fill: Color = Design.canvas, radius: CGFloat = Design.radius) -> some View {
-        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-        return background(shape.fill(fill)
-            .overlay(shape.strokeBorder(Design.ink.opacity(0.06), lineWidth: 0.5))
-            .overlay(shape.inset(by: 0.5).strokeBorder(.white.opacity(0.9), lineWidth: 1))
-            .shadow(color: .black.opacity(0.047), radius: 14, y: 11)
-            .shadow(color: .black.opacity(0.035), radius: 15, y: 23))
+    /// Liquid Glass squircle (optionally tinted). Reduce Transparency falls back to an opaque fill automatically.
+    func softCard(_ tint: Color? = nil, radius: CGFloat = Design.radius) -> some View {
+        let glass: Glass = tint.map { .regular.tint($0) } ?? .regular
+        return glassEffect(glass, in: .rect(cornerRadius: radius))
     }
 }
 
-/// Puffy pill: white capsule with inner highlights and soft drop shadows; `prominent` is ink on white text.
+/// Soft colour blobs behind the white canvas so Liquid Glass has something to refract (glass on pure white reads flat).
+struct Backdrop: View {
+    var body: some View {
+        ZStack {
+            Design.canvas
+            LinearGradient(colors: [Color(red: 0.97, green: 0.97, blue: 1), Color(red: 1, green: 0.97, blue: 0.95)],
+                           startPoint: .topLeading, endPoint: .bottomTrailing)
+            GeometryReader { g in
+                let w = g.size.width, h = g.size.height
+                ZStack {
+                    blob(Design.pink, 0.22, CGSize(width: w * 0.55, height: w * 0.45)).position(x: w * 0.12, y: h * 0.12)
+                    blob(Design.sky, 0.22, CGSize(width: w * 0.6, height: w * 0.5)).position(x: w * 0.92, y: h * 0.35)
+                    blob(Design.orange, 0.16, CGSize(width: w * 0.55, height: w * 0.45)).position(x: w * 0.2, y: h * 0.75)
+                    blob(Design.violet, 0.16, CGSize(width: w * 0.5, height: w * 0.45)).position(x: w * 0.85, y: h * 0.95)
+                }
+            }
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+    }
+
+    private func blob(_ c: Color, _ o: Double, _ s: CGSize) -> some View {
+        Ellipse().fill(c.opacity(o)).frame(width: s.width, height: s.height).blur(radius: 70)
+    }
+}
+
+/// Liquid Glass pill: interactive glass capsule; `prominent` is glass tinted ink with white text (or a custom tint).
 /// Destructive buttons get red text.
 struct PuffyPillButtonStyle: ButtonStyle {
     var prominent = false
+    var tint: Color = Design.ink
     @Environment(\.isEnabled) private var enabled
-    @State private var hover = false
 
     func makeBody(configuration: Configuration) -> some View {
-        let fill = prominent ? Design.ink : Color.white
+        let glass: Glass = prominent ? .regular.tint(tint).interactive() : .regular.interactive()
         return configuration.label
             .font(.system(size: 12.5, weight: .medium)).tracking(-0.1)
             .labelStyle(PillLabel())
             .foregroundStyle(prominent ? .white : configuration.role == .destructive ? Design.red : Design.ink)
             .padding(.horizontal, 14).frame(height: 30)
-            .background(
-                Capsule()
-                    .fill(fill
-                        .shadow(.inner(color: .white.opacity(prominent ? 0.18 : 0.67), radius: 2, y: 1))
-                        .shadow(.inner(color: .white.opacity(prominent ? 0.06 : 0.85), radius: 2, y: -4))
-                        .shadow(.inner(color: prominent ? .black.opacity(0.4) : Color(white: 0.898).opacity(0.55), radius: 7)))
-                    .overlay(Capsule().strokeBorder(prominent ? .white.opacity(0.12) : .white.opacity(0.9), lineWidth: 1))
-                    .overlay(Capsule().strokeBorder(Design.ink.opacity(prominent ? 0 : 0.07), lineWidth: 0.5))
-                    .shadow(color: .black.opacity(0.06), radius: 1.5, y: 1)
-                    .shadow(color: .black.opacity(0.047), radius: 14, y: 11)
-                    .shadow(color: .black.opacity(0.035), radius: 15, y: 23)
-            )
             .contentShape(Capsule())
-            .scaleEffect(configuration.isPressed ? 0.97 : hover && enabled ? 1.02 : 1)
+            .glassEffect(glass, in: .capsule)
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .opacity(enabled ? 1 : 0.45)
-            .onHover { hover = $0 }
             .animation(.snappy(duration: 0.15), value: configuration.isPressed)
-            .animation(.snappy(duration: 0.15), value: hover)
     }
 
     private struct PillLabel: LabelStyle {
@@ -116,13 +125,9 @@ struct WidgetTile: View {
         }
         .padding(12)
         .frame(width: size.width, height: size.height, alignment: .leading)
-        .background {
-            if filled {   // gloss: a soft white sheen from the top
-                LinearGradient(colors: [.white.opacity(0.28), .clear], startPoint: .top, endPoint: .center)
-                    .clipShape(RoundedRectangle(cornerRadius: Design.tileRadius, style: .continuous))
-            }
-        }
-        .softCard(filled ? tint : Design.canvas, radius: Design.tileRadius)
+        .contentShape(.rect(cornerRadius: Design.tileRadius))
+        .glassEffect(filled ? .regular.tint(tint.opacity(0.9)).interactive() : .regular.interactive(),
+                     in: .rect(cornerRadius: Design.tileRadius))
     }
 }
 
@@ -137,7 +142,7 @@ struct Tag: View {
         }
         .font(Design.label).foregroundStyle(Design.ink)
         .padding(.horizontal, 10).padding(.vertical, 4)
-        .background(Design.mist, in: Capsule())
+        .glassEffect(.regular.tint(tint?.opacity(0.18)), in: .capsule)
     }
 }
 
@@ -150,7 +155,7 @@ struct CardSection<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title).font(.system(size: 12.5, weight: .medium)).tracking(-0.1).foregroundStyle(Design.secondary).padding(.leading, 4)
-            VStack(spacing: 0) { content() }.softCard()
+            VStack(spacing: 0) { GlassEffectContainer(spacing: 8) { VStack(spacing: 0) { content() } } }.softCard()
             if let footer { Text(footer).secondaryText().padding(.horizontal, 4).fixedSize(horizontal: false, vertical: true) }
         }
     }
@@ -187,13 +192,18 @@ struct SoftField: View {
         .textFieldStyle(.plain)
         .font(Design.body)
         .foregroundStyle(Design.ink)
-        .padding(.horizontal, 12).frame(height: 30)
-        .background(Design.mist, in: RoundedRectangle(cornerRadius: Design.fieldRadius, style: .continuous))
+        .padding(.horizontal, 14).frame(height: 30)
+        .glassEffect(.regular.tint(.white.opacity(0.35)).interactive(), in: .capsule)
     }
 }
 
-/// Settings toggle: a switch tinted ink.
+/// Settings toggle: the native macOS 26 Liquid Glass switch, tinted ink.
 struct InkToggle: View {
     @Binding var isOn: Bool
     var body: some View { Toggle("", isOn: $isOn).labelsHidden().toggleStyle(.switch).tint(Design.ink) }
+}
+
+/// Pop-up picker as a glass capsule (native popup, glass button chrome).
+extension View {
+    func glassPicker() -> some View { pickerStyle(.menu).buttonStyle(.glass).controlSize(.large) }
 }

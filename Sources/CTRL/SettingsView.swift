@@ -16,13 +16,19 @@ struct SettingsView: View {
         ("screen", "Screen", "eye"),
     ]
 
+    @Namespace private var tabs
+
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 6) {
-                ForEach(Self.panes, id: \.id) { p in PaneTab(title: p.title, icon: p.icon, selected: pane == p.id) { pane = p.id } }
+            GlassEffectContainer(spacing: 6) {
+                HStack(spacing: 6) {
+                    ForEach(Self.panes, id: \.id) { p in
+                        PaneTab(title: p.title, icon: p.icon, selected: pane == p.id, ns: tabs) {
+                            withAnimation(.bouncy(duration: 0.35)) { pane = p.id }
+                        }
+                    }
+                }
             }
-            .padding(5)
-            .background(Design.mist, in: Capsule())
             .padding(.vertical, 14)
             .frame(maxWidth: .infinity)
             Group {
@@ -37,37 +43,33 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .frame(width: 640, height: 660)
-        .background(Design.canvas)
+        .background(Backdrop())
         .navigationTitle(Self.panes.first { $0.id == pane }?.title ?? "Settings")
-        .toolbarBackground(Design.canvas, for: .windowToolbar)
-        .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .tint(Design.ink)
         .accentColor(Design.ink)
         .preferredColorScheme(.light)
     }
 }
 
-/// Settings pane switcher: segments on a gray capsule; the selected one is a puffy white pill.
+/// Settings pane switcher: glass capsule segments; the selected one is ink-tinted glass that morphs between tabs.
 private struct PaneTab: View {
     let title: String, icon: String, selected: Bool
+    let ns: Namespace.ID
     let action: () -> Void
     @State private var hover = false
     var body: some View {
         Button(action: action) {
             Label(title, systemImage: icon)
                 .font(.system(size: 12.5, weight: .medium)).tracking(-0.1)
-                .foregroundStyle(selected ? Design.ink : Design.secondary.opacity(hover ? 1 : 0.85))
-                .padding(.horizontal, 14).frame(height: 30)
-                .background {
-                    if selected {
-                        Capsule().fill(.white).shadow(color: .black.opacity(0.08), radius: 1.5, y: 1).shadow(color: .black.opacity(0.05), radius: 8, y: 4)
-                    }
-                }
+                .foregroundStyle(selected ? .white : Design.ink.opacity(hover ? 1 : 0.8))
+                .padding(.horizontal, 14).frame(height: 32)
                 .contentShape(Capsule())
+                .glassEffect(selected ? .regular.tint(Design.ink).interactive() : .regular.interactive(), in: .capsule)
+                .glassEffectID(selected ? "selected" : title, in: ns)
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
-        .animation(.snappy(duration: 0.18), value: selected)
     }
 }
 
@@ -108,12 +110,14 @@ private struct GeneralPane: View {
                     Image(nsImage: art).resizable().scaledToFit().frame(width: 64, height: 64)
                 }
                 PageTitle(title: "A faithful computer", subtitle: "Hold ⌥ and speak. Butterfly does the rest.")
+                GlassEffectContainer(spacing: 10) {
                 HStack(spacing: 10) {
                     WidgetTile(title: "Speak", symbol: "waveform", caption: "Hold ⌥", tint: Design.pink)
                     WidgetTile(title: "Meetings", symbol: "video.fill", caption: recordMeetings ? "Asks to record" : "Off", tint: Design.sky)
                     WidgetTile(title: "Routines", symbol: "bolt.fill", caption: "One phrase", tint: Design.orange)
                     WidgetTile(title: "Memory", symbol: "eye.fill", caption: ScreenMemory.shared.enabled ? "On" : "Off", tint: Design.slate)
                     WidgetTile(title: "Keys", symbol: hasKey ? "checkmark.seal.fill" : "key.fill", caption: hasKey ? "Saved" : "Add a key", tint: Design.green, filled: false)
+                }
                 }
             }
             .frame(maxWidth: .infinity)
@@ -139,7 +143,7 @@ private struct GeneralPane: View {
                         Text("Automatic · \(AudioInput.chosen.map(\.name) ?? "none")").tag("")
                         ForEach(mics) { Text($0.name).tag($0.uid) }
                     }
-                    .labelsHidden().frame(width: 260)
+                    .labelsHidden().glassPicker().frame(width: 260)
                     .onChange(of: mic) { AudioInput.preferredUID = mic }
                 }
             }
@@ -284,21 +288,23 @@ private struct RoutinesPane: View {
                                 }
                                 .foregroundStyle(Design.ink)
                                 .padding(6)
-                                .background { if selection == r.id { RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.white).shadow(color: .black.opacity(0.06), radius: 6, y: 3) } }
-                                .contentShape(Rectangle())
+                                .contentShape(.rect(cornerRadius: 12))
+                                .glassEffect(selection == r.id ? .regular.tint(.white.opacity(0.6)).interactive() : .identity, in: .rect(cornerRadius: 12))
                             }
                             .buttonStyle(.plain)
                         }
                     }
                 }
+                GlassEffectContainer(spacing: 4) {
                 HStack(spacing: 4) {
                     Button { add() } label: { Image(systemName: "plus") }.buttonStyle(.puffy).help("New routine")
                     Button(role: .destructive) { remove() } label: { Image(systemName: "minus") }.buttonStyle(.puffy).disabled(selection == nil).help("Delete routine")
                 }
+                }
             }
             .padding(12)
             .frame(width: 180)
-            .background(Design.mist, in: RoundedRectangle(cornerRadius: Design.radius, style: .continuous))
+            .softCard(radius: Design.radius)
             .padding([.leading, .vertical], 20)
 
             if let i = store.routines.firstIndex(where: { $0.id == selection }) {
