@@ -58,6 +58,41 @@ enum CLI {
             for r in DebugRecorder.allRuns().suffix(10).reversed() { print("“\(r.said)” → \(r.outcome ?? "—") → \(r.verdict)\(r.correction.map { " (“\($0)”)" } ?? "")") }
             exit(0)
         }
+        // `--session-selftest`: a listening session with 2 fake runs 3 s apart, then idle → auto-stop after 5 s (temp debug dir).
+        if args.contains("--session-selftest") {
+            if ProcessInfo.processInfo.environment["CTRL_DEBUG_DIR"] == nil { setenv("CTRL_DEBUG_DIR", NSTemporaryDirectory() + "butterfly-session-selftest", 1) }
+            try? FileManager.default.removeItem(at: DebugRecorder.root)
+            Task { @MainActor in
+                guard DebugRecorder.enabled else { print("turn developer mode on first"); exit(1) }
+                let t0 = Date(), video = RunVideo.shared, trace = DecisionTrace.shared
+                var busy = true
+                video.onSaved = { dir in
+                    guard let dir else { print("FAIL session discarded"); exit(1) }
+                    Task { @MainActor in
+                        let dur = (try? await AVURLAsset(url: dir.appendingPathComponent("video.mp4")).load(.duration).seconds) ?? 0
+                        let md = (try? String(contentsOf: dir.appendingPathComponent("session.md"), encoding: .utf8)) ?? ""
+                        let runs = DebugRecorder.allRuns()
+                        print(String(format: "stopped %.1f s after start · video %.1f s", Date().timeIntervalSince(t0), dur))
+                        for r in runs { print("run “\(r.said)” @", RunVideo.Session.clock(r.videoOffset ?? -1), "in", r.session ?? "nil") }
+                        let one = Set(runs.compactMap(\.session)).count == 1 && runs.count == 2 && runs.allSatisfy { $0.session != nil }
+                        print(one && md.contains("run.md") ? "ok   one video spans both runs" : "FAIL"); print("dir:", dir.path)
+                        exit(one ? 0 : 1)
+                    }
+                }
+                video.start { (busy, "") }                                   // ⌥ down: listening
+                try? await Task.sleep(for: .seconds(1)); busy = false
+                for (i, said) in ["open notes", "click the weather widget"].enumerated() {
+                    if i > 0 { try? await Task.sleep(for: .seconds(3)) }
+                    trace.begin(said)
+                    trace.add(.outcome, i == 0 ? "open(Notes)" : "click(Weather)", nil, ms: 300)
+                    if i == 1 { video.ring(at: CGPoint(x: CGDisplayBounds(CGMainDisplayID()).midX, y: CGDisplayBounds(CGMainDisplayID()).midY)) }   // ring only, no real click
+                    trace.add(.rule, "click check", i == 1 ? "done 0.90" : nil)
+                    trace.end()
+                }
+                print("runs done at", String(format: "%.1f s", Date().timeIntervalSince(t0)), "· waiting for 5 s idle…")
+            }
+            return true
+        }
         if args.contains("--debug-selftest") { debugSelftest(); return true }
         // `--video-selftest`: 4 s of the main display with fake captions + a click ring → mp4 + contact sheet in a temp dir.
         if args.contains("--video-selftest") {

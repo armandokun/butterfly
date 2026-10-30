@@ -454,7 +454,7 @@ final class NotchModel: ObservableObject {
         levels = levels.map { _ in 0 }
         phase = .listening
         if !dictation { MarkGesture.shared.enabled = true }   // while you hold ⌥ you can press-hold-drag to mark something
-        if !dictation { RunVideo.shared.start() }   // developer mode: a video of this command
+        if !dictation { RunVideo.shared.start { [weak self] in self?.videoActivity ?? (false, "") } }   // developer mode: one video per session
         Cues.listening()
         Ducker.duck()
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
@@ -473,6 +473,12 @@ final class NotchModel: ObservableObject {
         }
     }
 
+    /// For the session video: busy = ⌥ held, thinking, a request or "Working…" in flight; plus what it hears.
+    private var videoActivity: (busy: Bool, transcript: String) {
+        var busy = phase == .thinking || requestTask != nil || working || (phase == .listening && !isLocked)
+        if case .system(_, let t, _) = phase, t.hasSuffix("…") { busy = true }
+        return (busy, transcript)
+    }
     private var firstLevel = true
     private var lastFinalizeMs: Int?
     static var t0 = Date()
@@ -527,6 +533,7 @@ final class NotchModel: ObservableObject {
     func unlock() {
         guard isLocked else { return }
         isLocked = false
+        RunVideo.shared.end()
         dictating = false
         dictationOnly = false
         MarkGesture.shared.enabled = false
@@ -641,14 +648,12 @@ final class NotchModel: ObservableObject {
             }
             guard !text.isEmpty else {
                 MarkGesture.shared.enabled = false
-                RunVideo.shared.discard()
                 // Total silence = wrong or muted mic, not a quiet voice: say which one, and where to change it.
                 if silent { return show(.system(symbol: "mic.slash", title: "Heard nothing", detail: "Using \(recorder.micName ?? "no microphone") · change it in Settings"), for: 3) }
                 return close()
             }
             if dictationOnly {
                 dictationOnly = false
-                RunVideo.shared.discard()
                 close()
                 frontApp?.activate()
                 try? await Task.sleep(for: .milliseconds(80))
@@ -681,7 +686,7 @@ final class NotchModel: ObservableObject {
         dictationOnly = false
         MarkGesture.shared.enabled = false
         if MarkOverlay.shared.hasMarks { MarkOverlay.shared.cancel() }
-        RunVideo.shared.discard()
+        RunVideo.shared.end()
         Task {
             await startTask?.value
             await recorder.cancel()

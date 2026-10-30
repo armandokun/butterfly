@@ -40,8 +40,8 @@ final class DebugRecorder {
         var correction: String?
         var skillPattern: String?
         var lessoned = false
-        var video: String?                // video.mp4: the screen from ⌥ down to 2 s after the action, captions burned in
-        var contactSheet: String?
+        var session: String?              // sessions/<this>/video.mp4: the whole listening session this run was part of
+        var videoOffset: Double?          // where this run starts in that video, seconds
     }
     struct Lesson: Codable { var said: String; var app: String?; var did: String; var why: String; var at: Date }
 
@@ -62,7 +62,7 @@ final class DebugRecorder {
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd_HH-mm-ss"
         records[id] = Record(id: id.uuidString, folder: "\(f.string(from: Date()))_\(id.uuidString.prefix(8).lowercased())", start: Date(), said: said)
         order.append(id)
-        RunVideo.shared.attach(id, folder: Self.runsDir.appendingPathComponent(records[id]!.folder), said: said)
+        RunVideo.shared.attach(id, folder: records[id]!.folder, said: said)
         // Only the last few minutes stay in memory (corrections attach to them); the rest lives on disk.
         while order.count > 30, let old = order.first { order.removeFirst(); records[old] = nil; ended.remove(old) }
     }
@@ -194,9 +194,13 @@ final class DebugRecorder {
         verdict("declined", by: repeated && !corrects && !force ? "repeated the same request" : "voice correction", correction: said, run: id)
     }
 
-    /// The run's video finished encoding (after the run ended).
-    func attachVideo(_ id: UUID, video: String, sheet: String?) {
-        update(id) { r in r.video = video; r.contactSheet = sheet }
+    /// The session video this run is in was saved (after the session went idle).
+    func attachSession(_ id: UUID, session: String, offset: Double) {
+        if records[id] != nil { return update(id) { r in r.session = session; r.videoOffset = offset } }
+        // Already out of memory: patch the file.
+        guard let r = Self.allRuns().last(where: { $0.id == id.uuidString }) else { return }
+        var x = r; x.session = session; x.videoOffset = offset
+        write(x)
     }
 
     // MARK: Lessons (self-improvement)
@@ -251,6 +255,8 @@ final class DebugRecorder {
         let fm = FileManager.default
         let all = ((try? fm.contentsOfDirectory(atPath: Self.runsDir.path)) ?? []).filter { !$0.hasPrefix(".") }.sorted()
         for old in all.dropLast(Self.keep) { try? fm.removeItem(at: Self.runsDir.appendingPathComponent(old)) }
+        let sessions = ((try? fm.contentsOfDirectory(atPath: RunVideo.sessionsDir.path)) ?? []).filter { !$0.hasPrefix(".") }.sorted()
+        for old in sessions.dropLast(50) { try? fm.removeItem(at: RunVideo.sessionsDir.appendingPathComponent(old)) }
     }
 
     static func markdown(_ r: Record) -> String {
@@ -282,9 +288,10 @@ final class DebugRecorder {
                 o += c.shots.map { " · [\($0)](\($0))" }.joined() + "\n"
             }
         }
-        if let v = r.video {
-            o += "\n## Video\n\nScreen from ⌥ down until 2 s after the action; captions show what was said and each decision as it happened, yellow rings mark clicks.\n\n"
-            o += "- [\(v)](\(v))\n" + (r.contactSheet.map { "- Contact sheet (12 frames, time + caption): [\($0)](\($0))\n\n![contact sheet](\($0))\n" } ?? "")
+        if let s = r.session {
+            let at = RunVideo.Session.clock(r.videoOffset ?? 0), base = "../../sessions/\(s)/"
+            o += "\n## Video\n\nThis run starts at **\(at)** in its session video (the whole listening session; captions show the utterance and each decision, yellow rings mark clicks).\n\n"
+            o += "- [video.mp4 @ \(at)](\(base)video.mp4) · [contact sheet](\(base)contact-sheet.jpg) · [session.md](\(base)session.md)\n"
         }
         if !r.clickOptions.isEmpty { o += "\n## Click options shown to the model (ranked)\n\n" + r.clickOptions.map { "- \($0)\n" }.joined() }
         if !r.menuOptions.isEmpty { o += "\n## Menu options shown to the model (ranked)\n\n" + r.menuOptions.map { "- \($0)\n" }.joined() }
@@ -314,7 +321,11 @@ final class DebugRecorder {
         md += "\(runs.count) runs · \(runs.filter { $0.verdict == "failed" }.count) failed · \(runs.filter { $0.verdict == "declined" }.count) declined · \(shared.lessons.count) lessons\n\n"
         md += "| When | Said | App | Outcome | Verdict | Run | Video |\n|---|---|---|---|---|---|---|\n"
         for r in sorted {
-            md += "| \(r.start.formatted(date: .numeric, time: .shortened)) | \(cell(r.said)) | \(cell(r.app.name ?? "?")) | \(cell(r.outcome ?? "—")) | **\(r.verdict)**\(r.correction.map { " “\(cell($0))”" } ?? "") | [run.md](runs/\(r.folder)/run.md) | \(r.video.map { "[mp4](runs/\(r.folder)/\($0))" } ?? "")\(r.contactSheet.map { " · [sheet](runs/\(r.folder)/\($0))" } ?? "") |\n"
+            md += "| \(r.start.formatted(date: .numeric, time: .shortened)) | \(cell(r.said)) | \(cell(r.app.name ?? "?")) | \(cell(r.outcome ?? "—")) | **\(r.verdict)**\(r.correction.map { " “\(cell($0))”" } ?? "") | [run.md](runs/\(r.folder)/run.md) | \(r.session.map { "[mp4 @ \(RunVideo.Session.clock(r.videoOffset ?? 0))](sessions/\($0)/video.mp4)" } ?? "") |\n"
+        }
+        let sessions = ((try? FileManager.default.contentsOfDirectory(atPath: RunVideo.sessionsDir.path)) ?? []).filter { !$0.hasPrefix(".") }.sorted().reversed()
+        if !sessions.isEmpty {
+            md += "\n## Session videos (one per listening session, newest first)\n\n" + sessions.map { "- \($0): [video.mp4](sessions/\($0)/video.mp4) · [contact sheet](sessions/\($0)/contact-sheet.jpg) · [session.md](sessions/\($0)/session.md)\n" }.joined()
         }
         try? md.write(to: root.appendingPathComponent("INDEX.md"), atomically: true, encoding: .utf8)
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd_HH-mm"

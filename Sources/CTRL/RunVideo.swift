@@ -3,91 +3,119 @@ import AVFoundation
 import CoreText
 import ScreenCaptureKit
 
-/// Developer mode: a short screen video per command, captions burned in (what was said, each decision as it
-/// happens, click-check scores, a red dot + timer) and a ring where Butterfly clicked. Starts when listening starts,
-/// stops ~2 s after the action finished, then a 12-frame contact sheet. Saved as video.mp4 + contact-sheet.jpg in the run folder.
+/// Developer mode: one screen video per listening session — from ⌥ down (or locking) through every command, its
+/// routing, actions, click checks and planner steps, until Butterfly has been idle for 5 s. Captions burned in (the
+/// current utterance + the latest decision, a red dot + timer) and a ring where Butterfly clicked; then a 16-frame
+/// contact sheet. ~/Library/Application Support/CTRL/debug/sessions/<date>_<id>/{video.mp4, contact-sheet.jpg, session.md}
 @MainActor
 final class RunVideo {
     static let shared = RunVideo()
-    static let cap: TimeInterval = 60
+    static let cap: TimeInterval = 600, idleAfter: TimeInterval = 5
+    static var sessionsDir: URL { DebugRecorder.root.appendingPathComponent("sessions") }
 
+    struct Run { let id: UUID; let folder: String; let said: String; let offset: Double; var outcome: String? }
     private var session: Session?
-    private var runs: [(id: UUID, folder: URL)] = []   // runs this recording belongs to (the first one keeps it)
+    private var folder: URL?
+    private var began = Date()
+    private var runs: [Run] = []
     private var open: Set<UUID> = []
-    private var stopTask: Task<Void, Never>?
+    private var lastActive = Date()
+    private var lastTranscript = ""
+    private var ending = false
+    private var watch: Task<Void, Never>?
+    /// Set by the notch: is it doing something (listening while ⌥ is held, thinking, a request in flight), and what it hears.
+    private var activity: () -> (busy: Bool, transcript: String) = { (false, "") }
+    /// Called with the session folder once it's saved (self-test).
+    var onSaved: ((URL?) -> Void)?
 
-    /// ⌥ pressed in action mode.
-    func start() {
-        guard DebugRecorder.enabled, session == nil, CGPreflightScreenCaptureAccess() else { return }
+    /// A listening session started (⌥ down / locked). Already recording: the same session goes on.
+    func start(force: Bool = false, activity: @escaping () -> (busy: Bool, transcript: String)) {
+        self.activity = activity
+        touch()
+        guard force || DebugRecorder.enabled, session == nil, CGPreflightScreenCaptureAccess() else { return }
         if let app = NSWorkspace.shared.frontmostApplication?.localizedName, ScreenMemory.isExcluded(app) { return }
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        let dir = Self.sessionsDir.appendingPathComponent("\(f.string(from: Date()))_\(UUID().uuidString.prefix(8).lowercased())")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let display = Memory.lastDisplay ?? Memory.displayUnderMouse ?? CGMainDisplayID()
-        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("butterfly-run-\(UUID().uuidString.prefix(8)).mp4")
-        let s = Session(display: display, url: tmp)
-        session = s; runs = []; open = []
+        let s = Session(display: display, url: dir.appendingPathComponent("video.mp4"))
+        session = s; folder = dir; began = Date(); runs = []; open = []; ending = false
         Task { [weak self] in
-            do { try await s.start() } catch { if self?.session === s { self?.session = nil } }
+            do { try await s.start() } catch { if self?.session === s { self?.session = nil; try? FileManager.default.removeItem(at: dir) } }
         }
-        stopTask = Task { [weak self] in   // hard cap
-            try? await Task.sleep(for: .seconds(Self.cap))
-            if !Task.isCancelled { self?.stop() }
+        // Idle watchdog: 5 s with nothing going on (or 10 min in total) ends the session.
+        watch = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard let self, self.session === s else { return }
+                let a = self.activity()
+                if a.busy || !self.open.isEmpty || a.transcript != self.lastTranscript { self.lastTranscript = a.transcript; self.touch() }
+                if !a.transcript.isEmpty, a.busy { s.caption("🎙 " + a.transcript, query: true, log: false) }
+                let idle = Date().timeIntervalSince(self.lastActive)
+                if idle >= (self.ending ? 1 : Self.idleAfter) || Date().timeIntervalSince(self.began) >= Self.cap { return self.stop() }
+            }
         }
     }
 
-    /// A run was created: the buffered file moves into its folder when the recording ends.
-    func attach(_ id: UUID, folder: URL, said: String) {
+    private func touch() { lastActive = Date() }
+
+    /// A run (one utterance) began: noted with its offset in the video.
+    func attach(_ id: UUID, folder runFolder: String, said: String) {
         guard let session else { return }
-        runs.append((id, folder)); open.insert(id)
-        cancelPendingStop()
+        runs.append(Run(id: id, folder: runFolder, said: said, offset: max(0, Date().timeIntervalSince(session.startedAt))))
+        open.insert(id); touch()
         session.caption("“\(said)”", query: true)
     }
 
-    func caption(_ text: String) { session?.caption(text) }
-    func ring(at p: CGPoint) { session?.ring(p) }
+    func caption(_ text: String) { session?.caption(text); if session != nil { touch() } }
+    func ring(at p: CGPoint) { session?.ring(p); if session != nil { touch() } }
 
-    /// The run finished its action. Aside / not a command: not worth a video. Otherwise stop 2 s later.
+    /// The run finished its action (incl. click checks).
     func finished(_ id: UUID, outcome: String?) {
         guard session != nil, open.remove(id) != nil else { return }
-        if let o = outcome, o.hasPrefix("aside") || o == "notACommand" { runs.removeAll { $0.id == id } }
-        guard open.isEmpty else { return }
-        if runs.isEmpty { return discard() }
-        cancelPendingStop()
-        stopTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(2))
-            if !Task.isCancelled { self?.stop() }
-        }
+        if let i = runs.firstIndex(where: { $0.id == id }) { runs[i].outcome = outcome }
+        touch()
     }
 
-    /// Nothing heard, cancelled, or a private app came forward.
+    /// Cancelled / locked mode ended: stop as soon as nothing is in flight.
+    func end() { if session != nil { ending = true } }
+
+    /// A private app came forward: nothing of this session is kept.
     func discard() {
         runs = []
         stop()
     }
 
-    private func cancelPendingStop() { stopTask?.cancel(); stopTask = nil }
+    /// Runs that were real commands (not asides / "not a command"): without one, the session isn't kept.
+    private var commands: [Run] { runs.filter { !($0.outcome ?? "").hasPrefix("aside") && $0.outcome != "notACommand" } }
 
     private func stop() {
-        stopTask?.cancel(); stopTask = nil
-        guard let s = session else { return }
-        session = nil
-        let target = runs.first
+        watch?.cancel(); watch = nil
+        guard let s = session, let dir = folder else { return }
+        session = nil; folder = nil
+        let keep = commands.isEmpty ? [] : runs
         runs = []; open = []
         Task {
-            guard let url = await s.finish() else { return }
-            guard let target else { try? FileManager.default.removeItem(at: url); return }
-            let fm = FileManager.default
-            try? fm.createDirectory(at: target.folder, withIntermediateDirectories: true)
-            let video = target.folder.appendingPathComponent("video.mp4")
-            try? fm.removeItem(at: video)
-            guard (try? fm.moveItem(at: url, to: video)) != nil else { return }
-            let sheet = target.folder.appendingPathComponent("contact-sheet.jpg")
-            let ok = await Self.contactSheet(video, captions: s.timeline, to: sheet)
-            DebugRecorder.shared.attachVideo(target.id, video: "video.mp4", sheet: ok ? "contact-sheet.jpg" : nil)
+            let url = await s.finish()
+            guard url != nil, !keep.isEmpty else { try? FileManager.default.removeItem(at: dir); onSaved?(nil); return }
+            let ok = await Self.contactSheet(dir.appendingPathComponent("video.mp4"), captions: s.timeline, to: dir.appendingPathComponent("contact-sheet.jpg"), count: 16)
+            let duration = (try? await AVURLAsset(url: dir.appendingPathComponent("video.mp4")).load(.duration).seconds) ?? 0
+            var md = "# Session \(dir.lastPathComponent)\n\nOne screen video of a whole listening session (\(Session.clock(duration)), \(keep.count) utterances), for an AI coding agent fixing Butterfly. "
+            md += "Captions burned in: the utterance and the latest decision; yellow rings mark clicks.\n\n- Video: [video.mp4](video.mp4)\n"
+            if ok { md += "- Contact sheet: [contact-sheet.jpg](contact-sheet.jpg)\n\n![contact sheet](contact-sheet.jpg)\n" }
+            md += "\n## Runs (offset in the video)\n\n| At | Said | Outcome | Run |\n|---|---|---|---|\n"
+            for r in keep {
+                md += "| \(Session.clock(r.offset)) | \(r.said.replacingOccurrences(of: "|", with: "/")) | \((r.outcome ?? "—").replacingOccurrences(of: "|", with: "/").prefix(80)) | [run.md](../../runs/\(r.folder)/run.md) |\n"
+                DebugRecorder.shared.attachSession(r.id, session: dir.lastPathComponent, offset: r.offset)
+            }
+            try? md.write(to: dir.appendingPathComponent("session.md"), atomically: true, encoding: .utf8)
+            onSaved?(dir)
         }
     }
 
     // MARK: Contact sheet
 
-    /// ~12 evenly spaced frames in a 4-wide grid, each labeled with its time and the caption showing then.
+    /// Evenly spaced frames in a 4-wide grid, each labeled with its time and the caption showing then.
     static func contactSheet(_ video: URL, captions: [(t: Double, text: String)], to out: URL, count: Int = 12) async -> Bool {
         let asset = AVURLAsset(url: video)
         guard let duration = try? await asset.load(.duration).seconds, duration > 0 else { return false }
@@ -144,6 +172,7 @@ final class RunVideo {
         private var timer: DispatchSourceTimer?
         private var started = Date()
         private var frames = 0
+        private var lastPTS = CMTime.negativeInfinity
         private var closed = false   // finish() came before start() got going
         private var query = ""
         private var current = ""
@@ -160,13 +189,14 @@ final class RunVideo {
         }
 
         var timeline: [(t: Double, text: String)] { queue.sync { _timeline } }
+        var startedAt: Date { queue.sync { started } }   // video time zero
         static func clock(_ t: Double) -> String { String(format: "%02d:%02d", Int(t) / 60, Int(t) % 60) }
 
-        func caption(_ text: String, query isQuery: Bool = false) {
+        func caption(_ text: String, query isQuery: Bool = false, log: Bool = true) {
             let t = Date()
             queue.async { [self] in
-                if isQuery { query = text } else { current = text }
-                _timeline.append((t.timeIntervalSince(started), text))
+                if isQuery { if query != text, log { current = "" }; query = text } else { current = text }
+                if log { _timeline.append((t.timeIntervalSince(started), text)) }
             }
         }
         func ring(_ p: CGPoint) { let t = Date(); queue.async { [self] in rings.append((p, t)) } }
@@ -228,7 +258,10 @@ final class RunVideo {
                                    bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) {
                 overlay(ctx)
             }
-            if adaptor.append(out, withPresentationTime: CMTime(value: CMTimeValue(frames), timescale: 10)) { frames += 1 }
+            // Wall-clock time: offsets in session.md / captions line up with the video even when frames were skipped.
+            let pts = CMTime(seconds: Date().timeIntervalSince(started), preferredTimescale: 600)
+            guard pts > lastPTS else { return }
+            if adaptor.append(out, withPresentationTime: pts) { frames += 1; lastPTS = pts }
         }
 
         private func overlay(_ ctx: CGContext) {
