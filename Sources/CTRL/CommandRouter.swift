@@ -32,7 +32,9 @@ struct CommandRouter {
         case audioOutputBluetooth(name: String, address: String)   // paired but not connected yet
         case pasteHistory(Clipboard.Item)
         case clipboardList
-        case agent(String)                       // second layer: the on-device LLM plans and does it
+        case agent(String)                       // needs understanding content / several steps: the planner does it
+        case memoryQuestion                      // what did I see / do earlier: answered from screen memory by the planner
+        case correction                          // "no, not that one": amends what the planner just did
         case webSearch(URL, query: String, engine: String)
         case askBrowser(String)                  // a question: typed into a new tab of the browser (Dia answers it)
         case press(KeyPress.Combo)
@@ -40,6 +42,7 @@ struct CommandRouter {
         case unsure(best: InstalledApp?)
         case needAddress
         case notACommand
+        case aside                               // not meant for the computer (thinking aloud, someone else talking): do nothing
     }
 
     /// Decision-tree node for the model call: intent first (with runners-up), then every other answer.
@@ -88,9 +91,10 @@ struct CommandRouter {
     /// `front`: that app (window commands act on it).
     /// `elements`: clickable things in its window, read while you spoke.
     /// `previous`: the last command you gave (for "this one too"). `dictating`: a type command is in progress.
+    /// `recentPlan`: what the planner just did (< 3 min ago), so "no, the other one" can be read as a correction.
     @MainActor
     func route(_ transcript: String, menu: MenuReader.Snapshot? = nil, front: NSRunningApplication? = nil, elements: [Clicker.Element] = [],
-               previous: String? = nil, dictating: Bool = false, cursor: CursorControl.Snapshot? = nil) async throws -> Outcome {
+               previous: String? = nil, dictating: Bool = false, cursor: CursorControl.Snapshot? = nil, conversational: Bool = false, recentPlan: String? = nil) async throws -> Outcome {
         let routeStart = Date()
         let catalog = AppCatalog.shared
         let transcript = catalog.resolvingGenericNames(transcript)
@@ -122,8 +126,9 @@ struct CommandRouter {
         var questions: [String: TypeSafeClient.Question] = [
             "intent": .choice("What does the user want the computer to do?", options: [
                 "open": "open, launch, show, put, place, or arrange applications and/or websites on screen (domains with any ending such as .com, .sh, .ai, .io); also switch to / go to / bring up a named app ('switch to Discord')",
-                "search": "search the web, Google, YouTube, Amazon, Maps, or Wikipedia for something ('search google for flights to paris', 'google best pizza near me', 'look up the weather in Rome', 'find cat videos on youtube')",
-                "question": "ask a general question that wants an answer or explanation: facts, how-to, definitions, advice, comparisons, maths, news, weather ('what's the capital of Peru', 'how do I boil an egg', 'why is the sky blue', 'how far is the moon'). Not about what's on screen, not the calendar, battery, timer or the song playing, and not an explicit 'search/google X'",
+                "search": "search for something on the web or on a named site / platform — Google, YouTube, Amazon, Maps, Wikipedia, LinkedIn, X/Twitter, GitHub, Reddit, Instagram, TikTok, Spotify, Gmail, etc. ('search google for flights to paris', 'google best pizza near me', 'search chaseit on linkedin', 'find cat videos on youtube', 'look up react hooks on github')",
+                "question": "ask a general question that wants an answer or explanation: facts, how-to, definitions, advice, comparisons, maths, news, weather ('what's the capital of Peru', 'how do I boil an egg', 'why is the sky blue', 'how far is the moon'). Not about what's on screen, not about what the user did or saw earlier (memory_question), not the calendar, battery, timer or the song playing, and not an explicit 'search/google X'",
+                "memory_question": "asks about the user's OWN past activity on this Mac: what they saw, read, looked at, did, or worked on earlier — in a period ('what did I do in the last five minutes', 'what was I working on this morning', 'summarize my afternoon') or about a specific thing seen before ('what was the camera price I saw on Stride', 'what was that article I read yesterday', 'do you remember the address on that page'). Not the calendar, not a web question",
                 "keys": "press a specific keyboard key or shortcut by name: escape, enter, tab, space, arrow keys, delete, F5, or a combination like command shift T, control C ('press escape', 'hit enter', 'press command K')",
                 "play_music": "play, start, resume, or put on music, a song, or a podcast",
                 "pause_music": "pause, stop, or silence the music or whatever is playing",
@@ -201,8 +206,15 @@ struct CommandRouter {
             if let previous {
                 intents["repeat"] = "do the previous command (“\(previous)”) again, e.g. 'this one too', 'this one as well', 'again', 'one more time', 'same here', 'do it again'"
             }
+            if let recentPlan {
+                intents["correction"] = "corrects or amends what the assistant JUST did for “\(recentPlan.prefix(80))”: 'no', 'no, not that', 'not that one', 'the other one', 'instead…', 'I meant…', 'that's wrong', 'not Advanced, Notifications', 'do it in Discord instead', 'undo that and…'. Not a brand-new request"
+            }
             if dictating {
-                intents["continue_typing"] = "more words to type: the user is still dictating text after a type command. Anything that isn't clearly a new command for the computer"
+                intents["continue_typing"] = "more words to type: the user is still dictating text after a type command — content meant to appear in the text field. Not a new command, and not a remark about what just happened"
+            }
+            if conversational {
+                // The mic stays open: much of what's heard isn't for the computer at all.
+                intents["aside"] = "not addressed to the computer, nothing to do: thinking aloud or reacting to what just happened ('okay that didn't work', 'hmm', 'sorry, let's start again', 'that's not what I expected', 'wait'), talking to another person, someone else's voice, or a fragment with no actionable request"
             }
             questions["intent"] = .choice(text, options: intents)
         }
@@ -286,6 +298,8 @@ struct CommandRouter {
 
         var state = ["spoken_command": transcript, "normalized": URLExtractor.normalize(transcript)]
         if let previous { state["previous_command"] = previous }
+        if let recentPlan { state["assistant_just_did"] = recentPlan }
+        if let w = ScreenMemory.window(in: transcript), w.label != "today" { state["period_mentioned"] = w.label }
         if let recent = Memory.summary { state["recent_actions"] = recent }
         if dictating { state["mode"] = "the user is dictating text; the last command was a type command" }
         if state["recent_actions"] != nil {
@@ -322,6 +336,9 @@ struct CommandRouter {
             DecisionTrace.shared.add(.rule, "→ type", "starts with “type” / “dictate”")
         }
         if intent == "repeat" { return previous == nil ? .notACommand : .repeatLast }
+        if intent == "aside" { return .aside }
+        if intent == "memory_question" { return .memoryQuestion }
+        if intent == "correction" { return recentPlan == nil ? .notACommand : .correction }
         if intent == "continue_typing" {
             let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
             return text.isEmpty ? .notACommand : .continueTyping(text)
@@ -589,7 +606,8 @@ struct CommandRouter {
     }
 
     private static func looksLikeSearch(_ spoken: String) -> Bool {
-        spoken.lowercased().range(of: #"^\s*(please\s+)?(search|google|look\s+up)\b"#, options: .regularExpression) != nil
+        spoken.lowercased().range(of: #"^\s*(ok(ay)?,?\s+)?(please\s+)?(can you\s+)?(search|google|look\s+up|find)\b"#, options: .regularExpression) != nil
+            || spoken.lowercased().range(of: #"\b(search|look up|find)\b.*\b(on|in)\s+(linkedin|twitter|github|reddit|instagram|tiktok|youtube|amazon|spotify|gmail|facebook|pinterest)\b"#, options: .regularExpression) != nil
     }
 
     private static func mentions(_ spoken: String, _ name: String) -> Bool {

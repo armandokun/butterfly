@@ -80,6 +80,18 @@ enum KeyCommands {
 
     struct Result { let symbol: String; let title: String; let detail: String? }
 
+    /// If the app's front window is in full screen, takes it out (AXFullScreen = false). True when it did.
+    static func leaveFullScreen(_ app: NSRunningApplication) -> Bool {
+        let ax = AXUIElementCreateApplication(app.processIdentifier)
+        var w: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(ax, kAXFocusedWindowAttribute as CFString, &w) == .success, let win = w,
+              CFGetTypeID(win) == AXUIElementGetTypeID() else { return false }
+        let window = unsafeBitCast(win, to: AXUIElement.self)
+        var v: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(window, "AXFullScreen" as CFString, &v) == .success, (v as? Bool) == true else { return false }
+        return AXUIElementSetAttributeValue(window, "AXFullScreen" as CFString, kCFBooleanFalse) == .success
+    }
+
     static func perform(_ a: Nav, in app: NSRunningApplication?) async -> Result {
         app?.activate()
         try? await Task.sleep(for: .milliseconds(60))
@@ -102,6 +114,8 @@ enum KeyCommands {
             p.activate()
             return Result(symbol: "rectangle.2.swap", title: p.localizedName ?? "Switched", detail: nil)
         case .showDesktop:
+            // A full-screen window lives in its own Space and can't be hidden: leave full screen first, then hide everything.
+            if let app, Self.leaveFullScreen(app) { try? await Task.sleep(for: .milliseconds(1100)) }
             // Hide every regular app (Finder's windows minimize), so only the desktop is left.
             for a in NSWorkspace.shared.runningApplications where a.activationPolicy == .regular && !a.isHidden {
                 if a.bundleIdentifier == "com.apple.finder" { continue }

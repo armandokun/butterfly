@@ -154,6 +154,10 @@ final class MeetingRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
         queue.sync { (Double(tracks.map(\.written).max() ?? 0) / 48000, tracks.first?.peak ?? 0, tracks.last?.peak ?? 0) }
     }
 
+    /// Both sides as separate files on the same timeline (set by `stop()`): the user's mic and everyone else.
+    /// nil when one side never produced audio or the two started more than a quarter second apart.
+    private(set) var sides: (me: URL, them: URL)?
+
     /// Stops and mixes. Returns the mixed file (or the one side that has audio).
     func stop() async throws -> URL {
         try? await stream?.stopCapture()
@@ -162,6 +166,7 @@ final class MeetingRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
         let files = zip([them, me], starts).compactMap { url, start in start.map { (url, $0) } }
         guard let first = files.map(\.1).min() else { throw Failure.noDisplay }
         if files.count == 1 { try? FileManager.default.copyItem(at: files[0].0, to: mixed); return mixed }
+        if let a = starts[0], let b = starts[1], abs((a - b).seconds) < 0.25 { sides = (me, them) }
 
         let comp = AVMutableComposition()
         for (url, start) in files {

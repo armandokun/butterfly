@@ -4,6 +4,7 @@ struct NotchView: View {
     @ObservedObject var model: NotchModel
     @ObservedObject private var music = NowPlaying.shared
     @ObservedObject private var timers = Timers.shared
+    @State private var clock = Date()   // coarse tick so the recording pill can widen as the time gets longer
     private var closed: CGSize { _ = model.screenID; return NotchMetrics.closedSize }
     private var island: Bool { _ = model.screenID; return !NotchMetrics.hasNotch }
 
@@ -11,7 +12,7 @@ struct NotchView: View {
     private enum Presentation: Hashable { case closed, compact, expanded }
     private var presentation: Presentation {
         switch model.phase {
-        case .idle: playingIdle || timerIdle || model.recording != nil || model.transcribing != nil ? .compact : .closed
+        case .idle: playingIdle || timerIdle || (model.recording != nil && model.recordingBadge) || model.transcribing != nil ? .compact : .closed
         case .listening where model.transcript.isEmpty: .compact   // just widen beside the notch
         case .level: .compact
         case .badge: .compact
@@ -31,6 +32,7 @@ struct NotchView: View {
         switch model.phase {
         case .agenda(_, let ev, let more):
             AgendaCard.height(allDay: ev.filter(\.allDay).count, timed: ev.filter { !$0.allDay }.count, more: more)
+        case .recap(_, _, let items): RecapCard.height(items: items.count)
         case .playlists: 168
         case .meetingPrompt, .recordingCard, .transcriptReady, .stopPrompt: 62
         default: nil
@@ -46,7 +48,11 @@ struct NotchView: View {
     private var compactExtra: CGFloat {
         if case .level = model.phase { return 150 }
         if case .badge(_, let text, _) = model.phase { return min(260, 70 + CGFloat(text.count) * 7.5 * 2) }
-        if model.phase == .idle, model.recording != nil { return 150 }
+        if model.phase == .idle, model.recordingBadge, let r = model.recording {
+            // Room grows with the clock: 4:38 → 18:38 → 1:08:38 (otherwise the digits slide under the notch).
+            let digits = Timers.format(clock.timeIntervalSince(r.since)).count
+            return 150 + CGFloat(max(0, digits - 4)) * 18
+        }
         if model.phase == .idle, model.transcribing != nil { return 250 }
         if timerIdle { return 110 }
         return playingIdle ? 80 : 92
@@ -97,6 +103,7 @@ struct NotchView: View {
                             if isPlayer, let t = music.track { PlayerCard(track: t) }
                             else if let a = answer { AnswerCard(title: a.title, text: a.text) }
                             else if case .agenda(let day, let ev, let more) = model.phase { AgendaCard(day: day, events: ev, more: more) }
+                            else if case .recap(let t, let r, let items) = model.phase { RecapCard(title: t, range: r, items: items) }
                             else if case .playlists(let t, let items) = model.phase { PlaylistCard(title: t, items: items) }
                             else if case .meetingPrompt(let app) = model.phase { MeetingPromptCard(app: app, answer: model.answerMeeting) }
                             else if model.phase == .recordingCard, let r = model.recording { RecordingCard(recording: r, stop: model.stopRecording) }
@@ -126,6 +133,9 @@ struct NotchView: View {
         .animation(.spring(response: 0.47, dampingFraction: 0.7, blendDuration: 1), value: presentation)
         .animation(.spring(response: 0.47, dampingFraction: 0.7, blendDuration: 1), value: island)
         .animation(.smooth(duration: 0.25), value: model.phase)
+        .animation(.smooth(duration: 0.3), value: clock)
+        .onReceive(Timer.publish(every: 15, on: .main, in: .common).autoconnect()) { now in if model.recording != nil { clock = now } }
+        .onChange(of: model.recording?.since) { _, _ in clock = Date() }
         .preferredColorScheme(.dark)
     }
 
@@ -133,7 +143,7 @@ struct NotchView: View {
         if case .level = model.phase { return "level" }
         if case .badge(let s, _, _) = model.phase { return "badge-\(s)" }
         if timerIdle { return "timer" }
-        if model.phase == .idle, model.recording != nil { return "recording" }
+        if model.phase == .idle, model.recordingBadge, model.recording != nil { return "recording" }
         if model.phase == .idle, model.transcribing != nil { return "transcribing" }
         return playingIdle ? "music" : "listen"
     }
@@ -143,7 +153,7 @@ struct NotchView: View {
         HStack(spacing: 0) {
             switch model.phase {
             case .idle:
-                if let r = model.recording {
+                if model.recordingBadge, let r = model.recording {
                     ButterflyMark(size: island ? 18 : closed.height - 14)
                     Spacer(minLength: 0)
                     HStack(spacing: 8) {
@@ -281,7 +291,7 @@ struct NotchView: View {
             Image(systemName: "timer").font(.system(size: 20, weight: .semibold)).foregroundStyle(.orange)
         case .badge(let s, _, let tint):
             Image(systemName: s).font(.system(size: 18, weight: .semibold)).foregroundStyle(tint)
-        case .idle, .answer, .agenda, .playlists, .meetingPrompt, .recordingCard, .transcriptReady, .stopPrompt:
+        case .idle, .answer, .agenda, .recap, .playlists, .meetingPrompt, .recordingCard, .transcriptReady, .stopPrompt:
             EmptyView()
         }
     }
@@ -316,6 +326,7 @@ struct NotchView: View {
         case .badge(_, let text, _): text
         case .answer(let t, _): t
         case .agenda: "Calendar"
+        case .recap(let t, _, _): t
         case .playlists(let t, _): t
         case .meetingPrompt: "Record this meeting?"
         case .recordingCard: "Recording"
@@ -572,6 +583,71 @@ private struct Waveform: View {
         }
         .frame(height: maxHeight + 4)
         .animation(.easeOut(duration: 0.08), value: levels)
+    }
+}
+
+/// "What did I do in the last five minutes?" — a timeline: period header, then one row per activity with
+/// time, the app's icon and a short line. Same bones as the calendar card.
+private struct RecapCard: View {
+    let title: String
+    let range: String
+    let items: [NotchModel.RecapItem]
+
+    static let header: CGFloat = 34, row: CGFloat = 24, gap: CGFloat = 8
+    static func height(items: Int) -> CGFloat { header + gap + CGFloat(items) * row + CGFloat(max(0, items - 1)) * 4 + 10 }
+
+    private func icon(_ app: String) -> NSImage? {
+        AppCatalog.shared.apps.first { $0.name.caseInsensitiveCompare(app) == .orderedSame }?.icon
+            ?? NSWorkspace.shared.runningApplications.first { $0.localizedName?.caseInsensitiveCompare(app) == .orderedSame }?.icon
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Self.gap) {
+            HStack(spacing: 10) {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(LinearGradient(colors: [.purple, .orange], startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .frame(width: 32, height: 32)
+                    .background(.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(title).font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
+                    Text(range).font(.system(size: 11).monospacedDigit()).foregroundStyle(.white.opacity(0.5))
+                }
+                Spacer()
+                Text("\(items.count) \(items.count == 1 ? "activity" : "activities")")
+                    .font(.system(size: 11, weight: .medium)).foregroundStyle(.white.opacity(0.45))
+            }
+            .frame(height: Self.header)
+
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(items.indices, id: \.self) { i in
+                    let it = items[i]
+                    HStack(spacing: 8) {
+                        Text(it.time)
+                            .font(.system(size: 12, weight: .medium).monospacedDigit()).foregroundStyle(.white.opacity(0.5))
+                            .frame(width: 44, alignment: .leading)
+                        // Thread line: dot per activity, joined top to bottom.
+                        ZStack {
+                            Rectangle().fill(.white.opacity(0.12)).frame(width: 1)
+                                .padding(.top, i == 0 ? Self.row / 2 : 0).padding(.bottom, i == items.count - 1 ? Self.row / 2 : 0)
+                            Circle().fill(.white.opacity(0.7)).frame(width: 5, height: 5)
+                        }
+                        .frame(width: 8, height: Self.row + 4)
+                        if let img = icon(it.app) {
+                            Image(nsImage: img).resizable().interpolation(.high).frame(width: 18, height: 18)
+                        } else {
+                            Image(systemName: "app.fill").font(.system(size: 14)).foregroundStyle(.white.opacity(0.4)).frame(width: 18, height: 18)
+                        }
+                        Text(it.text).font(.system(size: 13, weight: .medium)).foregroundStyle(.white).lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                    .frame(height: Self.row)
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 

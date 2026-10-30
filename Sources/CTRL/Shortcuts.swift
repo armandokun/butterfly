@@ -69,25 +69,59 @@ enum KeyPress {
     }
 }
 
-/// "search google for flights to paris", "google best pizza", "look up X on youtube" → results page.
+/// "search google for flights to paris", "google best pizza", "search chaseit on linkedin" → that site's results page.
 enum WebSearch {
+    /// Spoken names → results URL. Google is the fallback when no platform is named.
+    static let engines: [(names: [String], label: String, base: String)] = [
+        (["youtube", "you tube"], "YouTube", "https://www.youtube.com/results?search_query="),
+        (["amazon"], "Amazon", "https://www.amazon.com/s?k="),
+        (["google maps", "maps"], "Maps", "https://www.google.com/maps/search/"),
+        (["google images", "images"], "Google Images", "https://www.google.com/search?tbm=isch&q="),
+        (["wikipedia"], "Wikipedia", "https://en.wikipedia.org/w/index.php?search="),
+        (["linkedin", "linked in"], "LinkedIn", "https://www.linkedin.com/search/results/all/?keywords="),
+        (["twitter", "x.com", "on x"], "X", "https://x.com/search?q="),
+        (["github", "git hub"], "GitHub", "https://github.com/search?q="),
+        (["reddit"], "Reddit", "https://www.reddit.com/search/?q="),
+        (["instagram", "insta"], "Instagram", "https://www.instagram.com/explore/search/keyword/?q="),
+        (["tiktok", "tik tok"], "TikTok", "https://www.tiktok.com/search?q="),
+        (["facebook"], "Facebook", "https://www.facebook.com/search/top/?q="),
+        (["pinterest"], "Pinterest", "https://www.pinterest.com/search/pins/?q="),
+        (["stack overflow", "stackoverflow"], "Stack Overflow", "https://stackoverflow.com/search?q="),
+        (["hacker news"], "Hacker News", "https://hn.algolia.com/?q="),
+        (["product hunt", "producthunt"], "Product Hunt", "https://www.producthunt.com/search?q="),
+        (["crunchbase"], "Crunchbase", "https://www.crunchbase.com/textsearch?q="),
+        (["npm"], "npm", "https://www.npmjs.com/search?q="),
+        (["ebay", "e-bay"], "eBay", "https://www.ebay.com/sch/i.html?_nkw="),
+        (["imdb"], "IMDb", "https://www.imdb.com/find/?q="),
+        (["medium"], "Medium", "https://medium.com/search?q="),
+        (["dribbble", "dribble"], "Dribbble", "https://dribbble.com/search/"),
+        (["behance"], "Behance", "https://www.behance.net/search/projects?search="),
+        (["unsplash"], "Unsplash", "https://unsplash.com/s/photos/"),
+        (["spotify"], "Spotify", "https://open.spotify.com/search/"),
+        (["twitch"], "Twitch", "https://www.twitch.tv/search?term="),
+        (["gmail", "my email", "my mail"], "Gmail", "https://mail.google.com/mail/u/0/#search/"),
+        (["google drive", "drive"], "Google Drive", "https://drive.google.com/drive/search?q="),
+        (["perplexity"], "Perplexity", "https://www.perplexity.ai/search?q="),
+        (["chatgpt", "chat gpt"], "ChatGPT", "https://chatgpt.com/?q="),
+        (["duckduckgo", "duck duck go"], "DuckDuckGo", "https://duckduckgo.com/?q="),
+        (["bing"], "Bing", "https://www.bing.com/search?q="),
+        (["google", "the web", "web", "online", "the internet"], "Google", "https://www.google.com/search?q="),
+    ]
+
     static func parse(_ spoken: String) -> (url: URL, query: String, engine: String)? {
         let s = spoken.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
         let lower = s.lowercased()
-        let engines: [(names: [String], label: String, base: String)] = [
-            (["youtube", "you tube"], "YouTube", "https://www.youtube.com/results?search_query="),
-            (["amazon"], "Amazon", "https://www.amazon.com/s?k="),
-            (["maps", "google maps"], "Maps", "https://www.google.com/maps/search/"),
-            (["wikipedia"], "Wikipedia", "https://en.wikipedia.org/w/index.php?search="),
-            (["google", "the web", "web", "online", "the internet"], "Google", "https://www.google.com/search?q="),
-        ]
-        let engine = engines.first { e in e.names.contains { lower.contains($0) } } ?? engines.last!
+        // Longest names first so "google maps" beats "google", "stack overflow" beats nothing.
+        let names = engines.flatMap(\.names).sorted { $0.count > $1.count }
+        let engine = engines.first { e in e.names.contains { lower.range(of: "\\b\(NSRegularExpression.escapedPattern(for: $0))\\b", options: .regularExpression) != nil } } ?? engines.last!
+        let alt = names.map { NSRegularExpression.escapedPattern(for: $0) }.joined(separator: "|")
         // Strip the command words around the query.
         var q = " " + lower + " "
         let patterns = [
-            #"^\s*(please\s+)?(search|look\s+up|google|find|look\s+for)\s+(on\s+|in\s+)?(google maps|google|youtube|you tube|amazon|maps|wikipedia|the web|the internet|web|online)?\s*(for\s+)?"#,
-            #"\s+(on|in|using|with)\s+(google maps|google|youtube|you tube|amazon|maps|wikipedia|the web|the internet|web|online)\s*$"#,
+            #"^\s*(ok(ay)?,?\s+)?(please\s+)?(can you\s+|could you\s+)?(go\s+to\s+(?:"# + alt + #")\s+and\s+)?(search|look\s+up|google|find|look\s+for|show\s+me)\s+(on\s+|in\s+|at\s+)?(?:"# + alt + #")?\s*(for\s+)?"#,
+            #"\s+(on|in|at|using|with|via)\s+(?:"# + alt + #")\s*(,?\s*(and\s+)?show\s+me\s+(the\s+)?results)?\s*$"#,
             #"\s+online\s*$"#,
+            #",?\s*(and\s+)?show\s+me\s+(the\s+)?results\s*$"#,
         ]
         for p in patterns { q = q.replacingOccurrences(of: p, with: " ", options: .regularExpression) }
         q = q.trimmingCharacters(in: .whitespaces)

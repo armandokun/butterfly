@@ -12,6 +12,8 @@ struct SettingsView: View {
         ("general", "General", "gearshape", Pond.lime),
         ("vocabulary", "Vocabulary", "character.book.closed", Pond.lavender),
         ("routines", "Routines", "bolt", Pond.peach),
+        ("skills", "Skills", "brain", Pond.teal),
+        ("screen", "Screen memory", "eye", Pond.rose),
     ]
 
     var body: some View {
@@ -26,6 +28,8 @@ struct SettingsView: View {
                 switch pane {
                 case "vocabulary": VocabularyPane()
                 case "routines": RoutinesPane(store: .shared, run: run)
+                case "skills": SkillsPane(store: .shared)
+                case "screen": ScreenMemoryPane()
                 default: ScrollView { GeneralPane() }
                 }
             }
@@ -295,6 +299,112 @@ private struct RoutinesPane: View {
         store.routines.remove(at: i)
         selection = store.routines.indices.contains(i) ? store.routines[i].id : store.routines.last?.id
     }
+}
+
+/// What Butterfly learned by doing: one row per skill, forget any of them.
+private struct SkillsPane: View {
+    @ObservedObject var store: SkillStore
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Things Butterfly learned")
+                    .font(Pond.display(26)).foregroundStyle(Pond.ink)
+                    .padding(.horizontal, 8).background(Pond.teal)
+                if store.skills.isEmpty {
+                    Text("Nothing yet. The first time a request needs working out, the finished plan is kept here and runs instantly next time.")
+                        .font(Pond.body).foregroundStyle(Pond.ink.opacity(0.6))
+                } else {
+                    PondSection(title: "\(store.skills.count) skills", tint: Pond.teal, footer: "Patterns with {slots} match what you say; the steps run without any model call.") {
+                        ForEach(store.skills.sorted { $0.lastUsed > $1.lastUsed }) { s in
+                            VStack(spacing: 0) {
+                                HStack(alignment: .top, spacing: 10) {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(s.name).font(Pond.body.weight(.medium)).foregroundStyle(Pond.ink)
+                                        Text("“\(s.pattern)”").font(Pond.body).foregroundStyle(Pond.ink.opacity(0.75))
+                                        Text(s.steps.map(Planner.describe).joined(separator: " → ")).font(Pond.label).foregroundStyle(Pond.ink.opacity(0.5)).lineLimit(2)
+                                        Text("\(s.uses) \(s.uses == 1 ? "use" : "uses") · last \(s.lastUsed.formatted(.relative(presentation: .named)))").font(Pond.label).foregroundStyle(Pond.ink.opacity(0.5))
+                                    }
+                                    Spacer()
+                                    Button("Forget") { store.forget(s) }.buttonStyle(.pond(Pond.rose))
+                                }
+                                .padding(.horizontal, 12).padding(.vertical, 8)
+                                Rectangle().fill(Pond.ink.opacity(0.08)).frame(height: 1)
+                            }
+                        }
+                        HStack {
+                            Spacer()
+                            Button("Forget all") { store.forgetAll() }.buttonStyle(.pond(Pond.rose))
+                        }
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                    }
+                }
+            }
+            .padding(20)
+        }
+    }
+}
+
+/// Screen memory: on/off, which apps are never read, what's stored.
+private struct ScreenMemoryPane: View {
+    @State private var enabled = ScreenMemory.shared.enabled
+    @State private var excluded = ScreenMemory.excludedApps
+    @State private var newApp = ""
+    @State private var count = ScreenMemory.shared.count
+    @State private var bytes = ScreenMemory.diskUsage
+    @FocusState private var adding: Bool
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("What was on your screen")
+                    .font(Pond.display(26)).foregroundStyle(Pond.ink)
+                    .padding(.horizontal, 8).background(Pond.rose)
+                PondSection(title: "Screen memory", tint: Pond.rose,
+                            footer: "Every few seconds the front window is read (on-device OCR) and kept with its time and app, so you can ask “what was the price I saw on Stride?” or “what did I do in the last hour?”. Text stays 30 days, frames 7 days, encrypted with a key in your Keychain. Nothing leaves the Mac until you ask about it.") {
+                    PondRow(title: "Remember my screen") {
+                        Toggle("", isOn: $enabled).labelsHidden().toggleStyle(.switch).tint(Pond.moss)
+                            .onChange(of: enabled) { ScreenMemory.shared.enabled = enabled }
+                    }
+                    PondRow(title: "\(count) screens · \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))", last: true) {
+                        Button("Forget history") { ScreenMemory.shared.forgetAll(); refresh() }.buttonStyle(.pond(Pond.rose))
+                    }
+                }
+                PondSection(title: "Never read these apps", tint: Pond.lavender,
+                            footer: "Password managers, banks and private chats are skipped by default. Private and incognito browser windows are always skipped.") {
+                    ForEach(excluded, id: \.self) { name in
+                        VStack(spacing: 0) {
+                            HStack {
+                                Text(name).font(Pond.body).foregroundStyle(Pond.ink)
+                                Spacer()
+                                Button("−") { excluded.removeAll { $0 == name } }.buttonStyle(.pond(Pond.rose)).help("Remove")
+                            }
+                            .padding(.horizontal, 12).padding(.vertical, 7)
+                            Rectangle().fill(Pond.ink.opacity(0.08)).frame(height: 1)
+                        }
+                    }
+                    HStack(spacing: 6) {
+                        PondField(prompt: "App name", text: $newApp).frame(width: 220).focused($adding).onSubmit(add)
+                        Button("+ Add") { add() }.buttonStyle(.pond(Pond.lavender)).disabled(newApp.trimmingCharacters(in: .whitespaces).isEmpty)
+                        Spacer()
+                        Button("Reset to defaults") { excluded = ScreenMemory.defaultExcluded }.buttonStyle(.pond(Pond.teal))
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                }
+            }
+            .padding(20)
+        }
+        .onChange(of: excluded) { ScreenMemory.excludedApps = excluded }
+        .onAppear(perform: refresh)
+    }
+
+    private func add() {
+        let n = newApp.trimmingCharacters(in: .whitespaces)
+        guard !n.isEmpty, !excluded.contains(where: { $0.caseInsensitiveCompare(n) == .orderedSame }) else { return }
+        excluded.append(n); newApp = ""
+    }
+
+    private func refresh() { enabled = ScreenMemory.shared.enabled; count = ScreenMemory.shared.count; bytes = ScreenMemory.diskUsage }
 }
 
 /// Open at login (SMAppService). On by default the first time CTRL runs from /Applications.

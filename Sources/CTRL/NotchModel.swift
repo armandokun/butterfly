@@ -21,6 +21,7 @@ final class NotchModel: ObservableObject {
         case badge(symbol: String, text: String, tint: Color)   // compact: icon left, short text right
         case answer(title: String, text: String)                // expanded, a few lines (screen summaries, agenda)
         case agenda(day: Date, events: [AgendaItem], more: Int) // expanded, iOS Calendar widget style
+        case recap(title: String, range: String, items: [RecapItem])   // expanded, "what did I do" timeline
         case playlists(title: String, items: [PlaylistItem])    // expanded: artwork tiles to pick from
         case meetingPrompt(app: String)                         // expanded: "Record this meeting?" with buttons
         case recordingCard                                      // expanded on hover while recording: time + Stop
@@ -29,10 +30,24 @@ final class NotchModel: ObservableObject {
     }
     struct Recording: Equatable { let app: String; let since: Date }
     /// A meeting is being recorded: the notch shows a red dot + time, hover to stop.
-    @Published var recording: Recording? { didSet { updateInteractive() } }
+    @Published var recording: Recording? {
+        didSet {
+            updateInteractive()
+            // Say "recording" for a few seconds, then get out of the way: hover the notch to see it again.
+            badgeTask?.cancel()
+            if let r = recording, oldValue?.since != r.since {
+                recordingBadge = true
+                badgeTask = Task { try? await Task.sleep(for: .seconds(5)); if !Task.isCancelled { recordingBadge = false } }
+            } else if recording == nil { recordingBadge = false }
+        }
+    }
+    @Published private(set) var recordingBadge = false
+    private var badgeTask: Task<Void, Never>?
     /// Gemini is writing the transcript for this meeting: the notch shows "Transcribing" until it's done.
     @Published var transcribing: String?
     struct AgendaItem: Equatable { let time: String; let title: String; let color: Color; let allDay: Bool }
+    /// One activity in a "what did I do" recap: when, in which app, what.
+    struct RecapItem: Equatable { let time: String; let app: String; let text: String }
     struct PlaylistItem: Equatable { let name: String; let artwork: NSImage? }
 
     /// Background events (volume keys, battery, Wi-Fi…): only when the notch isn't busy with you.
@@ -94,6 +109,7 @@ final class NotchModel: ObservableObject {
             }
         }
         Meetings.shared.start()
+        Meetings.nameUntitledFolders()
         // Brightness keys: same, macOS shows its own HUD.
         KeyCommands.startTracking()
         Clipboard.shared.start()
@@ -186,6 +202,15 @@ final class NotchModel: ObservableObject {
     private var typedInDictation = false   // first dictated sentence gets no leading space
     private var lastActionDisplay: CGDirectDisplayID?
     private var pendingPlaylists: ([String], Date)?
+    /// A planned action waiting for "yes" (destructive steps ask first).
+    private var pendingPlan: (plan: Planner.Plan, request: String, at: Date)?
+    /// The last thing the planner (or a learned skill) did — "no, not that, do this" refers to it.
+    private var lastPlan: (previous: Planner.Previous, at: Date)?
+    /// What the planner did in the last 3 minutes, if anything: the router offers "correction" only then.
+    private var recentPlan: Planner.Previous? {
+        guard let last = lastPlan, Date().timeIntervalSince(last.at) < 180 else { return nil }
+        return last.previous
+    }
 
     /// "the second one" / "Mycelia" / "play jet fuel" → one of the offered names.
     static func pick(_ spoken: String, from names: [String]) -> String? {
@@ -221,6 +246,7 @@ final class NotchModel: ObservableObject {
         case .timerDone(let l): did = "\(l) finished"
         case .answer(let title, let text): did = "\(title): \(text.prefix(120))"
         case .agenda(_, let events, _): did = "showed the agenda: " + events.map { "\($0.time) \($0.title)" }.joined(separator: ", ")
+        case .recap(_, _, let items): did = "recapped: " + items.map { "\($0.time) \($0.app) — \($0.text)" }.joined(separator: "; ")
         case .playlists(_, let items): did = "offered playlists: " + items.map(\.name).joined(separator: ", ")
         case .badge(_, let text, _): did = text
             if case .focus(let m) = outcome { did = m == "off" ? "Focus turned off" : "\(m) Focus turned on" }
@@ -229,7 +255,7 @@ final class NotchModel: ObservableObject {
         default:
             switch outcome {
             case .type(let t, _), .continueTyping(let t): did = "typed “\(t.prefix(60))”"
-            case .notACommand, .unsure: return
+            case .notACommand, .unsure, .aside, .memoryQuestion, .correction: return
             default: did = "\(outcome)".prefix(80).description
             }
         }
@@ -398,7 +424,7 @@ final class NotchModel: ObservableObject {
     private var requestGen = 0
 
     func begin(dictation: Bool = false) {
-        if cancelRequestIfRunning() { return }
+        cancelRequestIfRunning()   // (normally already done in arm)
         if Date().timeIntervalSince(Self.armedAt) > 0.5 { Self.t0 = Date() } else { Self.t0 = Self.armedAt }
         firstLevel = true
         defer { Self.lap("begin() returned") }
@@ -535,7 +561,17 @@ final class NotchModel: ObservableObject {
                     phase = .thinking
                     readFrontApp()   // the last command may have changed what's in front
                     if (MarkOverlay.shared.hasMarks || MarkGesture.shared.isMarking), await handleMarked(next) { continue }
-                    await handle(next)
+                    // "Open Notes, and once you're there create a new note": one sentence, several commands, in order.
+                    let steps = dictating ? [next] : await StepSplitter.split(next)
+                    for (i, step) in steps.enumerated() {
+                        if i > 0 {
+                            try? await Task.sleep(for: .milliseconds(600))
+                            transcript = step; phase = .thinking
+                            readFrontApp()
+                        }
+                        if steps.count > 1 { DecisionTrace.shared.add(.rule, "step \(i + 1)/\(steps.count)", step) }
+                        await handle(step)
+                    }
                 }
                 // Let you see the result before the next one replaces it.
                 try? await Task.sleep(for: .milliseconds(queue.isEmpty ? 0 : 700))
@@ -609,7 +645,12 @@ final class NotchModel: ObservableObject {
                 MarkOverlay.shared.cancel()   // an ordinary command; no next sentence coming for the marks
             }
             MarkGesture.shared.enabled = false
-            await handle(text)
+            let steps = await StepSplitter.split(text)
+            for (i, step) in steps.enumerated() {
+                if i > 0 { try? await Task.sleep(for: .milliseconds(600)); transcript = step; phase = .thinking; readFrontApp() }
+                if steps.count > 1 { DecisionTrace.shared.add(.rule, "step \(i + 1)/\(steps.count)", step) }
+                await handle(step)
+            }
         }
     }
 
@@ -676,7 +717,7 @@ final class NotchModel: ObservableObject {
         Keys.press(9, flags: .maskCommand)   // ⌘V: the screenshot
         try? await Task.sleep(for: .milliseconds(500))
         let where_ = app.map { $0.bundleIdentifier == CursorControl.bundleID ? "" : " (seen in \($0.localizedName ?? "another app"))" } ?? ""
-        await Typer.type("\(text) — I marked it with a glowing white line on the screenshot\(where_).", pressReturn: true)
+        await Typer.type("\(Typer.clean(text)) — I marked it with a glowing white line on the screenshot\(where_).", pressReturn: true)
         show(.system(symbol: "paperplane", title: "Asked Cursor", detail: "“\(text.prefix(50))”"), for: 2.5)
         Memory.record(said: text, did: "sent a marked screenshot to Cursor", app: app?.localizedName)
     }
@@ -711,7 +752,7 @@ final class NotchModel: ObservableObject {
     /// CTRL_PTT=1: simulate holding ⌥ for 2 s, five times (timing test).
     /// ⌥ went down: start the mic during the hold delay; cancelled if it was a shortcut.
     func arm() {
-        if cancelRequestIfRunning() { return }   // a tap (even a very short one) stops a running request
+        cancelRequestIfRunning()   // ⌥ again while a request runs: that one's dropped, the new one wins (tap = just cancel)
         Self.armedAt = Date()
         recorder.arm()
         TypeSafeClient.preconnect()
@@ -726,7 +767,6 @@ final class NotchModel: ObservableObject {
         self.requestTask = nil
         MarkGesture.shared.enabled = false
         if MarkOverlay.shared.hasMarks { MarkOverlay.shared.cancel() }
-        recorder.disarm()
         NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
         DecisionTrace.shared.add(.outcome, "cancelled by ⌥ tap", nil)
         show(.system(symbol: "xmark", title: "Cancelled", detail: nil), for: 0.9)
@@ -757,7 +797,7 @@ final class NotchModel: ObservableObject {
     }
 
     func say(_ lines: [String]) {
-        Task { for l in lines { await handle(l); try? await Task.sleep(for: .seconds(2.5)) } }
+        Task { for l in lines { readFrontApp(); await handle(l); try? await Task.sleep(for: .seconds(2.5)) } }
     }
 
     private func handle(_ text: String) async {
@@ -788,19 +828,74 @@ final class NotchModel: ObservableObject {
             if let site, let url = URLExtractor.url(for: site) { return openSite(url) }
             return show(.message("Add your TypeSafe key from the menu bar"))
         }
+        // A plan asked "yes?" — this is the answer.
+        if let p = pendingPlan, Date().timeIntervalSince(p.at) < 40 {
+            pendingPlan = nil
+            if text.lowercased().range(of: #"\b(yes|yeah|yep|sure|do it|go ahead|confirm|ok|okay)\b"#, options: .regularExpression) != nil {
+                trace.add(.rule, "confirmed", p.plan.confirm)
+                return await execute(p.plan, request: p.request, learn: true)
+            }
+            trace.add(.rule, "not confirmed", "plan dropped")
+        }
+        // "learn this app" / "learn Slack": read the app's menus, settings and scripting now (also happens on first need).
+        if !dictating, let m = text.lowercased().firstMatch(of: #/^\W*(?:please\s+)?(?:re)?learn\s+(this app|the app|(?:the\s+)?[\w .]+?)\W*$/#) {
+            let who = String(m.1)
+            let target = who.hasSuffix("app") && who.hasPrefix("th") ? frontApp
+                : AppCatalog.shared.localMatch(who).flatMap { a in NSWorkspace.shared.runningApplications.first { $0.bundleURL == a.url } } ?? frontApp
+            if let target {
+                let name = target.localizedName ?? "app"
+                trace.add(.rule, "learn app", name)
+                show(.system(symbol: "brain", title: "Learning \(name)…", detail: "reading its menus and settings"), for: 30)
+                let m = await AppMap.shared.build(for: target, crawlSettings: true)
+                return show(.system(symbol: "brain", title: "Learned \(name)", detail: "\(m?.entries.count ?? 0) things it can do" + (m?.settingsCrawled == true ? "" : " · no settings window found")), for: 3)
+            }
+        }
+        // "What did I do in the last five minutes?": a named period is language-light proof it's about screen memory.
+        if !dictating, Keychain.geminiKey != nil, let w = ScreenMemory.window(in: text), w.label.hasPrefix("the last") || w.label.hasPrefix("around"),
+           !ScreenMemory.shared.timeline(from: w.from, to: w.to).isEmpty {
+            trace.add(.rule, "memory question", "period: \(w.label)")
+            return await plan(text, trace: trace)
+        }
+        // Learned skill: the same kind of request as before fires its saved steps — no model, no network.
+        if !dictating, let (skill, values) = SkillStore.shared.match(text) {
+            trace.add(.rule, "learned skill", "“\(skill.pattern)” · \(values.map { "\($0.key)=\($0.value)" }.joined(separator: ", "))")
+            trace.add(.outcome, "skill: \(skill.name)", nil, ms: 0)
+            SkillStore.shared.used(skill, phrase: text)
+            let plan = Planner.harden(Planner.Plan(steps: SkillStore.fill(skill.steps, with: values), summary: skill.name), request: text)
+            if let c = plan.confirm {
+                pendingPlan = (plan, text, Date())
+                return show(.answer(title: "Say “yes” to continue", text: c), for: 40)
+            }
+            return await execute(plan, request: text, learn: false, skillPattern: skill.pattern)
+        }
         do {
             let router = CommandRouter(client: TypeSafeClient(apiKey: key))
             let previous = Date().timeIntervalSince(lastCommandAt) < 120 ? lastCommand : nil
+            // A sentence the router probably won't know (long, or naming nothing it knows): start the planner now, so when
+            // the router says "not a command" the answer is already on its way. Cancelled the moment the router wins.
+            var speculative: Task<Planner.Plan, Error>?
+            if !dictating, !inPlan, let gKey = Keychain.geminiKey, likelyNeedsPlanner(text), frontApp.map({ AppMap.shared.isCurrent(for: $0) }) ?? true {
+                let (app, menu, els) = (frontApp, menuSnapshot, clickables)
+                speculative = Task { try await Planner.plan(text, app: app, menu: menu, elements: els, key: gKey) }
+                trace.add(.rule, "planner started in parallel", "\(text.split(separator: " ").count) words, nothing known named")
+            }
+            defer { speculative?.cancel() }
             let routed = Date()
             var outcome = try await router.route(text, menu: menuSnapshot, front: frontApp, elements: clickables,
-                                                 previous: previous, dictating: dictating, cursor: cursorSnapshot)
+                                                 previous: previous, dictating: dictating, cursor: cursorSnapshot, conversational: isLocked, recentPlan: recentPlan?.request)
+            if case .aside = outcome {
+                // Said to yourself or to someone else: leave it, keep listening (and keep dictating if you were).
+                trace.add(.outcome, "aside — ignored", nil, ms: Int(Date().timeIntervalSince(routed) * 1000))
+                phase = .listening; transcript = ""
+                return
+            }
             if case .repeatLast = outcome, let previous {
                 trace.add(.rule, "repeat", "re-running “\(previous)” in the current context")
                 // Same words, fresh context: "close this tab" → "this one too" closes the new current tab.
                 outcome = try await router.route(previous, menu: menuSnapshot, front: frontApp, elements: clickables)
             } else {
                 switch outcome {
-                case .notACommand, .unsure, .needAddress, .fileNotFound, .continueTyping, .startDictation, .repeatLast: break
+                case .notACommand, .unsure, .needAddress, .fileNotFound, .continueTyping, .startDictation, .repeatLast, .memoryQuestion, .correction: break
                 default: lastCommand = text; lastCommandAt = Date()
                 }
             }
@@ -816,6 +911,16 @@ final class NotchModel: ObservableObject {
             }
             trace.add(.outcome, Self.describe(outcome), nil, ms: Int(Date().timeIntervalSince(routed) * 1000))
             if case .routine(let r) = outcome { return await run(r, router: router) }
+            // Nothing built-in understood it: let the planner work it out from the screen (and learn it for next time).
+            if !dictating, !inPlan, Keychain.geminiKey != nil {
+                switch outcome {
+                case .notACommand, .unsure, .memoryQuestion, .agent: return await plan(text, trace: trace, speculative: speculative)
+                case .correction:
+                    trace.add(.rule, "correction", "follows “\(recentPlan?.request ?? "")”")
+                    return await plan(text, trace: trace, previous: recentPlan)
+                default: break
+                }
+            }
             lastActionDisplay = nil
             let ran = Date()
             await perform(outcome)
@@ -869,7 +974,7 @@ final class NotchModel: ObservableObject {
                 if action == .scratch { lastTyped = nil }
                 show(.system(symbol: r.symbol, title: r.title, detail: r.detail), for: 1.0)
             case .screen(let action, let request): await screen(action, request: request)
-            case .agent(let request): await agent(request)
+            case .agent: show(.message("Add a Gemini key in Settings for this"), for: 2.5)   // the planner does these; handled in handle() when there is a key
             case .webSearch(let url, let query, let engine):
                 BrowserTab.open(url)
                 show(.system(symbol: "magnifyingglass", title: query, detail: "Searching \(engine)"), for: 1.6)
@@ -1034,6 +1139,8 @@ final class NotchModel: ObservableObject {
             case .unsure(let app): show(.unsure(app))
             case .needAddress: show(.message("Say the full address, like “facebook dot com”"))
             case .notACommand: show(.message("Try “open Safari” or “open facebook.com”"))
+            case .memoryQuestion, .correction: show(.message("Add a Gemini key in Settings for this"), for: 2.5)   // handled in handle() when there is one
+            case .aside: close()
             }
     }
 
@@ -1159,48 +1266,133 @@ final class NotchModel: ObservableObject {
         }
     }
 
-    // MARK: Second layer (Apple's on-device model plans and calls tools)
+    // MARK: Third layer (Gemini plans from the screen; the result is learned as a skill)
 
-    private func agent(_ request: String) async {
-        guard ScreenReader.available else { return show(.message("Turn on Apple Intelligence for this"), for: 3) }
-        let app = frontApp
-        Agent.runCommand = { [weak self] command in
-            guard let self, let router = self.router, let o = try? await router.route(command) else { return "Couldn't do that." }
-            await self.perform(o)
-            return "Done: \(command)"
+    /// True while a plan's "command" steps run through the router, so a step that fails can't call the planner again.
+    private var inPlan = false
+
+    /// Worth starting the planner before the router answers? Long sentences, or ones naming no app, menu item or
+    /// control the router could match, almost always end up there anyway.
+    private func likelyNeedsPlanner(_ text: String) -> Bool {
+        let words = text.split { !$0.isLetter && !$0.isNumber }.map { $0.lowercased() }
+        if words.count > 6 { return true }
+        let said = Set(words.filter { $0.count >= 3 })
+        func named(_ s: String) -> Bool { s.lowercased().split { !$0.isLetter && !$0.isNumber }.contains { $0.count >= 3 && said.contains(String($0)) } }
+        if AppCatalog.shared.apps.contains(where: { named($0.name) }) { return false }
+        if (menuSnapshot?.items ?? []).contains(where: { named($0.title) }) { return false }
+        if clickables.contains(where: { named($0.label) }) { return false }
+        return true
+    }
+
+    private func plan(_ request: String, trace: DecisionTrace, previous: Planner.Previous? = nil, speculative: Task<Planner.Plan, Error>? = nil) async {
+        guard let key = Keychain.geminiKey else { return }
+        // A learned skill said differently ("look up X on LinkedIn" vs "search X on linkedin"): cheaper than planning again.
+        if previous == nil, !SkillStore.shared.skills.isEmpty, let apiKey = Keychain.apiKey,
+           let (skill, confidence) = try? await SkillStore.shared.semanticMatch(request, client: TypeSafeClient(apiKey: apiKey)), confidence >= 0.6 {
+            let slots = SkillStore.slots(in: skill.pattern)
+            if let values = try? await Planner.fillSlots(slots, pattern: skill.pattern, request: request, key: key) {
+                speculative?.cancel()
+                trace.add(.rule, "learned skill (by meaning)", "“\(skill.pattern)” \(String(format: "%.2f", confidence)) · \(values.map { "\($0.key)=\($0.value)" }.joined(separator: ", "))")
+                SkillStore.shared.used(skill, phrase: request)
+                let plan = Planner.harden(Planner.Plan(steps: SkillStore.fill(skill.steps, with: values), summary: skill.name), request: request)
+                if let c = plan.confirm { pendingPlan = (plan, request, Date()); return show(.answer(title: "Say “yes” to continue", text: c), for: 40) }
+                return await execute(plan, request: request, learn: false, skillPattern: skill.pattern)
+            }
         }
-        Agent.typeText = { [weak self] text in
-            app?.activate()
-            try? await Task.sleep(for: .milliseconds(120))
-            await Typer.type(text, pressReturn: false)
-            self?.lastTyped = text
+        // First planner request about an app: learn what it can do (menus, every Settings pane, scripting) and keep it.
+        if let app = frontApp, !AppMap.shared.isCurrent(for: app) {
+            let name = app.localizedName ?? "this app"
+            show(.system(symbol: "brain", title: "Learning \(name)…", detail: "reading its menus and settings once"), for: 30)
+            let t = Date()
+            let m = await AppMap.shared.build(for: app, crawlSettings: true) { [weak self] p in self?.show(.system(symbol: "brain", title: "Learning \(name)…", detail: p), for: 30) }
+            trace.add(.context, "learned \(name)", "\(m?.entries.count ?? 0) entries · settings \(m?.settingsCrawled == true ? "read" : "not found")", ms: Int(Date().timeIntervalSince(t) * 1000))
+            readFrontApp()
         }
-        show(.system(symbol: "sparkles", title: "Working on it…", detail: request), for: 45)
+        show(.system(symbol: "brain", title: previous == nil ? "Working it out…" : "Adjusting…", detail: request), for: 45)
+        let started = Date()
         do {
-            let done = try await Agent.run(request, app: app, client: Keychain.apiKey.map { TypeSafeClient(apiKey: $0) })
-            let created = done.compactMap(\.created)
-            if created.isEmpty { Undo.clear() }
-            else {
-                let what = done.count == 1 ? "removed “\(done[0].text.components(separatedBy: " · ").first ?? "it")”" : "removed \(created.count) items"
-                Undo.register(what) { _ = Agent.remove(created) }
-            }
-            if done.count == 1, let d = done.first {
-                show(.system(symbol: d.symbol, title: d.symbol == "sparkles" ? "Done" : Self.doneTitle(d.symbol), detail: d.text + (d.created != nil ? " · say “undo” to remove" : "")), for: 3.5)
+            let plan: Planner.Plan
+            if let speculative, previous == nil, !speculative.isCancelled {
+                plan = try await speculative.value
+                trace.add(.rule, "used the parallel plan", nil)
             } else {
-                show(.answer(title: "Done", text: done.map(\.text).joined(separator: "\n")), for: 4)
+                speculative?.cancel()
+                plan = try await Planner.plan(request, app: frontApp, menu: menuSnapshot, elements: clickables, previous: previous, key: key)
             }
+            trace.add(.outcome, "planned \(plan.steps.count) steps", plan.steps.map(Planner.describe).joined(separator: " → ").nilIfEmpty, ms: Int(Date().timeIntervalSince(started) * 1000))
+            // The request this plan is really about: a correction keeps the original wording, so the fixed skill replaces the wrong one.
+            let about = previous?.request ?? request
+            if let r = plan.recap {
+                let items = r.items.map { RecapItem(time: $0.time, app: $0.app, text: $0.text) }
+                lastPlan = (Planner.Previous(request: about, steps: [], result: "recapped \(items.count) activities", skillPattern: nil), Date())
+                Memory.record(said: request, did: "recap: " + items.map { "\($0.time) \($0.app) — \($0.text)" }.joined(separator: "; "))
+                return show(.recap(title: r.title, range: r.range, items: items), for: 4 + Double(items.count) * 1.5)
+            }
+            if plan.steps.isEmpty, let s = plan.skill {
+                // Taught, not asked ("when I say X, do Y"): keep it, nothing to run.
+                if let old = previous?.skillPattern, old != s.pattern, let o = SkillStore.shared.skills.first(where: { $0.pattern == old }) { SkillStore.shared.forget(o) }
+                SkillStore.shared.learn(name: s.name, pattern: s.pattern, steps: s.steps, example: about)
+                lastPlan = (Planner.Previous(request: about, steps: s.steps, result: "learned, not run", skillPattern: s.pattern), Date())
+                return show(.system(symbol: "brain", title: "Learned", detail: "“\(s.pattern)” → \(s.steps.map(Planner.describe).joined(separator: " → "))"), for: 4)
+            }
+            if let q = plan.clarify, plan.steps.isEmpty {
+                lastPlan = (Planner.Previous(request: about, steps: [], result: "answered: \(q.prefix(160))", skillPattern: previous?.skillPattern), Date())
+                return show(.answer(title: "Butterfly", text: q), for: 6)
+            }
+            if plan.steps.isEmpty { return show(.message("Couldn't work that out"), for: 2.5) }
+            if let c = plan.confirm {
+                pendingPlan = (plan, about, Date())
+                return show(.answer(title: "Say “yes” to continue", text: c), for: 40)
+            }
+            await execute(plan, request: about, learn: true, replacing: previous?.skillPattern)
         } catch {
-            show(.message("Couldn't do it: \(error.localizedDescription)"), for: 3)
+            if Task.isCancelled { return }
+            trace.add(.error, error.localizedDescription, nil)
+            show(.message(error.localizedDescription), for: 3)
         }
     }
 
-    private static func doneTitle(_ symbol: String) -> String {
-        switch symbol {
-        case "calendar.badge.plus": "Added to Calendar"
-        case "checklist": "Added to Reminders"
-        case "keyboard": "Typed"
-        default: "Done"
+    private func execute(_ plan: Planner.Plan, request: String, learn: Bool, skillPattern: String? = nil, replacing: String? = nil) async {
+        let app = frontApp
+        Planner.runCommand = { [weak self] command in
+            guard let self, let router = self.router else { return "failed: no router" }
+            self.inPlan = true; defer { self.inPlan = false }
+            self.readFrontApp()   // a previous step may have opened another app
+            let front = self.frontApp ?? app
+            guard let o = try? await router.route(command, menu: self.menuSnapshot, front: front, elements: self.clickables) else { return "failed: route" }
+            switch o {
+            case .notACommand, .unsure: return "failed: not understood"
+            default: await self.perform(o); return "ok"
+            }
         }
+        Planner.openURL = { [weak self] url in self?.openSite(url) }
+        Planner.readToggle = { label in Clicker.toggleState(label: label, in: NSWorkspace.shared.frontmostApplication ?? app) }
+        Planner.progress = { [weak self] d in self?.show(.media(nil, title: plan.summary, detail: d), for: 30) }
+        let r = await Planner.run(plan.steps, app: app, request: request)
+        if !r.created.isEmpty {
+            let what = r.created.count == 1 ? "removed “\(r.said.last?.components(separatedBy: " · ").first ?? "it")”" : "removed \(r.created.count) items"
+            let ids = r.created
+            Undo.register(what) { _ = CalendarWriter.remove(ids) }
+        }
+        if let f = r.failed {
+            if f == "cancelled" { return }
+            lastPlan = (Planner.Previous(request: request, steps: plan.steps, result: "stopped: \(f)", skillPattern: skillPattern ?? plan.skill?.pattern), Date())
+            return show(.system(symbol: "xmark.circle", title: "Stopped", detail: f), for: 3)
+        }
+        var pattern = skillPattern
+        // Only a run whose clicks were seen to take effect is worth remembering; an unverified one would learn a guess.
+        let learned = learn && r.verified && plan.skill != nil
+        if learned, let s = plan.skill {
+            // A corrected plan replaces the skill that got it wrong.
+            if let old = replacing, old != s.pattern, let o = SkillStore.shared.skills.first(where: { $0.pattern == old }) { SkillStore.shared.forget(o) }
+            SkillStore.shared.learn(name: s.name, pattern: s.pattern, steps: s.steps, example: request)
+            pattern = s.pattern
+        }
+        lastPlan = (Planner.Previous(request: request, steps: plan.steps, result: r.said.isEmpty ? "done" : "answered: \(r.said.joined(separator: " ").prefix(160))", skillPattern: pattern), Date())
+        let corrected = replacing != nil
+        if !r.said.isEmpty { show(.answer(title: plan.summary, text: r.said.joined(separator: "\n")), for: 6) }
+        else { show(.system(symbol: learned ? "brain" : "checkmark", title: plan.summary, detail: learned ? (corrected ? "got it · corrected for next time" : "learned · next time it's instant") : (learn && plan.skill != nil ? "done · not saved, couldn't verify the clicks" : nil)), for: 2.2) }
+        Memory.record(said: request, did: plan.summary, app: app?.localizedName)
     }
 
     // MARK: Screen (Apple's on-device model)

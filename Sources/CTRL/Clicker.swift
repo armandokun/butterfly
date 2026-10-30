@@ -15,11 +15,11 @@ enum Clicker {
     }
 
     private static let clickable: Set<String> = [
-        "AXButton", "AXLink", "AXCheckBox", "AXRadioButton", "AXMenuButton", "AXPopUpButton",
+        "AXButton", "AXLink", "AXCheckBox", "AXRadioButton", "AXSwitch", "AXMenuButton", "AXPopUpButton",
         "AXTab", "AXDisclosureTriangle", "AXCell", "AXRow", "AXStaticText", "AXImage", "AXTextField", "AXTextArea", "AXComboBox", "AXSearchField",
     ]
     private static let roleNames: [String: String] = [
-        "AXButton": "button", "AXLink": "link", "AXCheckBox": "checkbox", "AXRadioButton": "option",
+        "AXButton": "button", "AXLink": "link", "AXCheckBox": "checkbox", "AXRadioButton": "option", "AXSwitch": "switch",
         "AXMenuButton": "menu button", "AXPopUpButton": "pop-up menu", "AXTab": "tab", "AXDisclosureTriangle": "disclosure arrow",
         "AXCell": "list item", "AXRow": "row", "AXStaticText": "text", "AXImage": "image",
         "AXTextField": "text field", "AXTextArea": "text area", "AXComboBox": "combo box", "AXSearchField": "search field",
@@ -69,6 +69,26 @@ enum Clicker {
             out[key] = ("the \(roleNames[e.role] ?? "element") labeled “\(e.label)”", e)
         }
         return out
+    }
+
+    /// The element a "click <label>" step means, and its on/off state when it's a toggle (nil for buttons, links…).
+    /// Read before and after a click so the planner can tell whether a toggle really flipped.
+    static let toggleRoles: Set<String> = ["AXCheckBox", "AXRadioButton", "AXSwitch"]
+    static func toggleState(label: String, in app: NSRunningApplication?) -> (found: Bool, value: Int?) {
+        guard let app else { return (false, nil) }
+        let els = elements(of: app)
+        let want = label.lowercased().trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+        guard !want.isEmpty else { return (false, nil) }
+        func fits(_ e: Element) -> Bool { let l = e.label.lowercased(); return l == want || l.contains(want) || want.contains(l) }
+        // The switch itself over the caption next to it (SwiftUI exposes both with the same label).
+        let el = els.first { toggleRoles.contains($0.role) && $0.label.lowercased() == want }
+            ?? els.first { toggleRoles.contains($0.role) && fits($0) }
+            ?? els.first { $0.label.lowercased() == want }
+            ?? els.first(where: fits)
+        guard let el else { return (false, nil) }
+        guard toggleRoles.contains(el.role) else { return (true, nil) }
+        let v: NSNumber? = attr(el.element, kAXValueAttribute)
+        return (true, v?.intValue)
     }
 
     static func press(_ e: Element) {
@@ -142,7 +162,7 @@ enum Clicker {
 
     // MARK: AX helpers
 
-    private static func label(of el: AXUIElement, role: String) -> String {
+    static func label(of el: AXUIElement, role: String) -> String {
         for key in [kAXTitleAttribute, kAXDescriptionAttribute, "AXLabel", kAXHelpAttribute, kAXPlaceholderValueAttribute] {
             if let s: String = attr(el, key), !s.trimmingCharacters(in: .whitespaces).isEmpty { return s.trimmingCharacters(in: .whitespacesAndNewlines) }
         }
@@ -159,7 +179,7 @@ enum Clicker {
         return ""
     }
 
-    private static func frame(of el: AXUIElement) -> CGRect? {
+    static func frame(of el: AXUIElement) -> CGRect? {
         guard let p: AXValue = attr(el, kAXPositionAttribute), let s: AXValue = attr(el, kAXSizeAttribute) else { return nil }
         var pos = CGPoint.zero, size = CGSize.zero
         AXValueGetValue(p, .cgPoint, &pos)
@@ -167,7 +187,7 @@ enum Clicker {
         return CGRect(origin: pos, size: size)
     }
 
-    private static func attr<T>(_ el: AXUIElement, _ name: String) -> T? {
+    static func attr<T>(_ el: AXUIElement, _ name: String) -> T? {
         var v: CFTypeRef?
         guard AXUIElementCopyAttributeValue(el, name as CFString, &v) == .success, let v else { return nil }
         if T.self == AXUIElement.self || T.self == AXValue.self {

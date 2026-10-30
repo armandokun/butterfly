@@ -5,238 +5,13 @@ import SwiftUI
 @main
 struct CTRLMain {
     static func main() {
-        let args = CommandLine.arguments
-        // `open CTRL.app --args --add-event "title" "yyyy-MM-dd HH:mm" minutes "location" "notes" ["calendar"]` (runs with CTRL's Calendar access)
-        if let i = args.firstIndex(of: "--add-event"), args.count >= i + 6 {
-            let a = Array(args[(i + 1)...])
-            Task {
-                _ = try? await Agent.store.requestFullAccessToEvents()
-                var out = "failed"
-                if let start = Agent.date(a[1]), let cal = Agent.calendar(named: a.count > 5 ? a[5] : "", request: "") {
-                    let e = EKEvent(eventStore: Agent.store)
-                    e.calendar = cal; e.title = a[0]; e.startDate = start
-                    e.endDate = start.addingTimeInterval((Double(a[2]) ?? 60) * 60)
-                    if !a[3].isEmpty { e.location = a[3] }
-                    if !a[4].isEmpty { e.notes = a[4] }
-                    do { try Agent.store.save(e, span: .thisEvent); out = "added \(a[0]) \(start) in \(cal.title)" } catch { out = "error \(error)" }
-                }
-                try? out.write(toFile: "/tmp/ctrl-add-event.txt", atomically: true, encoding: .utf8)
-                exit(0)
-            }
-            RunLoop.main.run()
-        }
-        if let i = args.firstIndex(of: "--date"), i + 1 < args.count {
-            for t in args[(i + 1)...] { print(t, "→", Agent.date(t).map { $0.formatted() } ?? "nil", "time:", Agent.hasTime(t)) }
-            return
-        }
-        // `CTRL --mictest`: records 3 s with the same recorder the notch uses, prints mic, level and transcript.
-        if args.contains("--mictest") {
-            Task { @MainActor in
-                let r = SpeechRecorder()
-                var peak: Float = 0
-                r.onLevel = { peak = max(peak, $0) }
-                try? await r.prepare()
-                do { try await r.start() } catch { print("start failed:", error); exit(1) }
-                print("listening with:", r.micName ?? "?")
-                try? await Task.sleep(for: .seconds(3))
-                let text = await r.stop()
-                print("peak level:", peak, "· heard:", text.isEmpty ? "(nothing)" : text)
-                exit(0)
-            }
-            RunLoop.main.run()
-        }
-        if args.contains("--playlist-art") {
-            let names = MediaController.ownPlaylists().prefix(4)
-            print("playlists:", Array(names))
-            for (n, img) in MediaController.artwork(for: Array(names)) { print(n, "→", img.map { "\($0.size)" } ?? "none") }
-            return
-        }
-        if let i = args.firstIndex(of: "--route"), i + 1 < args.count {
-            return routeFromCLI(args[(i + 1)...].joined(separator: " "))
-        }
-        if let i = args.firstIndex(of: "--set-gemini-key"), i + 1 < args.count { Keychain.saveGemini(args[i + 1]); print("saved"); return }
-        // `--meeting-apps`: which processes use a mic right now (meeting detection).
-        if args.contains("--meeting-apps") { print(Meetings.micUsers()); return }
-        // `--transcribe file.m4a [title]`: Gemini meeting transcript to stdout.
-        if let i = args.firstIndex(of: "--transcribe"), i + 1 < args.count {
-            Task {
-                do {
-                    guard let key = Keychain.geminiKey else { print("no Gemini key"); exit(1) }
-                    let t = Date()
-                    print(try await MeetingTranscriber.transcribe(URL(fileURLWithPath: args[i + 1]), title: args.count > i + 2 ? args[i + 2] : nil, attendees: [], key: key))
-                    print("(\(Int(Date().timeIntervalSince(t))) s)")
-                } catch { print("error:", error.localizedDescription) }
-                exit(0)
-            }
-            RunLoop.main.run()
-        }
-        // `open Butterfly.app --args --record-test 20`: records 20 s of call audio + mic, writes /tmp/butterfly-record-test.txt.
-        if let i = args.firstIndex(of: "--record-test"), i + 1 < args.count {
-            Task {
-                let r = MeetingRecorder(folder: URL(fileURLWithPath: "/tmp/butterfly-record-test"))
-                var out = ""
-                do {
-                    try await r.start(micUID: AudioInput.chosen?.uid)
-                    try await Task.sleep(for: .seconds(Double(args[i + 1]) ?? 10))
-                    let s = r.stats
-                    let url = try await r.stop()
-                    out = "ok \(url.path) seconds=\(s.seconds) themPeak=\(s.themPeak) mePeak=\(s.mePeak) err=\(r.lastError.map { "\($0)" } ?? "-")"
-                } catch { out = "error \(error)" }
-                try? out.write(toFile: "/tmp/butterfly-record-test.txt", atomically: true, encoding: .utf8)
-                exit(0)
-            }
-            RunLoop.main.run()
-        }
+        // Debug flags (`--plan`, `--route`, `--skills`, …) run without the app: they print and exit.
+        if CLI.run(CommandLine.arguments) { RunLoop.main.run(); return }
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
         app.setActivationPolicy(.accessory)
         app.run()
-    }
-
-    /// Debug: `CTRL --route "open facebook dot com"` prints what would happen, opens nothing.
-    /// Add `--exec` to actually run it.
-    @MainActor static func routeFromCLI(_ text: String) {
-        let exec = CommandLine.arguments.contains("--exec")
-        let text = text.replacingOccurrences(of: "--exec", with: "").trimmingCharacters(in: .whitespaces)
-        AudioOutput.warm()
-        AppCatalog.shared.reload()
-        print("sites:", URLExtractor.candidates(in: text))
-        guard let key = Keychain.apiKey else { print("no API key"); exit(1) }
-        Bluetooth.shared.refreshNow()
-        // CTRL_CLIPS="newest|older|oldest" pretends these were copied.
-        if let c = ProcessInfo.processInfo.environment["CTRL_CLIPS"] { Clipboard.shared.seed(c.components(separatedBy: "|")) }
-        // CTRL_MEMORY="said|did|app;said|did|app" pretends these happened just now.
-        if let mem = ProcessInfo.processInfo.environment["CTRL_MEMORY"] {
-            for e in mem.split(separator: ";") {
-                let f = e.split(separator: "|").map(String.init)
-                if f.count >= 2 { Memory.record(said: f[0], did: f[1], app: f.count > 2 ? f[2] : nil) }
-            }
-        }
-        // CTRL_APP=Dia pretends that app is in front (for menu commands).
-        var menu: MenuReader.Snapshot?
-        var front: NSRunningApplication?
-        var elements: [Clicker.Element] = []
-        if let name = ProcessInfo.processInfo.environment["CTRL_APP"],
-           let app = NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == name }) {
-            front = app
-            app.activate(); usleep(400_000)   // like real use: the app is in front
-            let t0 = Date()
-            menu = MenuReader.snapshot(of: app)
-            print("menu: \(menu?.items.count ?? 0) items read in \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
-            let t1 = Date()
-            elements = ProcessInfo.processInfo.environment["CTRL_VISUAL"] == "1" ? [] : Clicker.elements(of: app)
-            print("clickables: \(elements.count) read in \(Int(Date().timeIntervalSince(t1) * 1000)) ms")
-            if ProcessInfo.processInfo.environment["CTRL_DUMP"] == "2" { elements.forEach { print("   ", $0.role, $0.label) } }
-            if ProcessInfo.processInfo.environment["CTRL_DUMP"] == "1" { menu?.items.forEach { print("   ", $0.key, $0.shortcut ?? "") } }
-        }
-        Task {
-            let start = Date()
-            do {
-                let router = CommandRouter(client: TypeSafeClient(apiKey: key))
-                let env = ProcessInfo.processInfo.environment
-                let cursorSnap = front.flatMap(CursorControl.snapshot)
-                if let cursorSnap { print("cursor: \(cursorSnap.chats.count) chats, project \(cursorSnap.currentProject ?? "-"), open: \(cursorSnap.chats.first { $0.current }?.title ?? "-")") }
-                let outcome = try await router.route(text, menu: menu, front: front, elements: elements,
-                                                     previous: env["CTRL_PREV"], dictating: env["CTRL_DICTATING"] == "1", cursor: cursorSnap)
-                let ms = String(format: "(%.0f ms)", Date().timeIntervalSince(start) * 1000)
-                if case .cursor(let action, let chat, let project, let message) = outcome {
-                    print("outcome: cursor \(action.rawValue) chat=\(chat?.title ?? "-") project=\(project ?? "-") message=“\(message)” \(ms)")
-                    if exec, let cursorSnap {
-                        let r = await CursorControl.perform(action, chat: chat, project: project, message: message, snapshot: cursorSnap, menu: menu)
-                        print("executed: \(r.title) \(r.detail ?? "")")
-                        try? await Task.sleep(for: .seconds(1))
-                    }
-                } else if case .askBrowser(let q) = outcome {
-                    print("outcome: askBrowser “\(q)” \(ms)")
-                    if exec { let b = await BrowserTab.ask(q); print("executed in \(b?.name ?? "-")"); try? await Task.sleep(for: .seconds(1)) }
-                } else if case .type(let text, let ret) = outcome {
-                    print("outcome: type “\(text)” return=\(ret) \(ms)")
-                    if exec { front?.activate(); try? await Task.sleep(for: .milliseconds(300)); await Typer.type(text, pressReturn: ret); print("executed") }
-                } else if case .file(let url, let reveal) = outcome {
-                    print("outcome: file \(url.path) reveal=\(reveal) \(ms)")
-                    if exec { Files.open(url, reveal: reveal) }
-                } else if case .click(let el) = outcome {
-                    print("outcome: click \(el.role) “\(el.label)” at \(el.frame) \(ms)")
-                    if exec { front?.activate(); Clicker.press(el); try? await Task.sleep(for: .seconds(0.8)); print("executed") }
-                } else if case .clickVisual(let app, let what) = outcome {
-                    print("outcome: clickVisual “\(what)” \(ms)")
-                    let t = Date()
-                    let p = try await router.locate(what, in: app)
-                    print("   located: \(p.map { "\($0)" } ?? "not visible") (\(Int(Date().timeIntervalSince(t) * 1000)) ms)")
-                    if exec, let p { app.activate(); try? await Task.sleep(for: .seconds(0.3)); Clicker.click(at: p); print("executed") }
-                } else if case .routine(let r) = outcome {
-                    print("outcome: routine \(r.name) \(ms)")
-                    for step in r.runnableSteps {
-                        let o = try await CommandRouter(client: TypeSafeClient(apiKey: key)).route(step)
-                        print("   step “\(step)” →", o)
-                    }
-                } else if case .window(let action, let app) = outcome {
-                    print("outcome: window \(action.rawValue) app=\(app.localizedName ?? "?") \(ms)")
-                    if exec {
-                        let r = await WindowCommands.perform(action, app: app)
-                        print("executed: \(r.title) \(r.detail ?? "")")
-                        try? await Task.sleep(for: .seconds(0.5))
-                    }
-                } else if case .system(let action, let level) = outcome {
-                    print("outcome: system \(action.rawValue) level=\(level.map(String.init) ?? "-") \(ms)")
-                    if exec, ![.lock, .sleep, .displayOff].contains(action) {
-                        let r = await SystemController.perform(action, level: level)
-                        print("executed: \(r.title) \(r.detail ?? "")")
-                        try? await Task.sleep(for: .seconds(1.2))
-                    }
-                } else if case .menu(let item, let app) = outcome {
-                    print("outcome: menu \(item.key) \(item.shortcut ?? "") \(ms)")
-                    if exec { let ok = await MenuReader.press(item, in: app); try? await Task.sleep(for: .seconds(1)); print("executed", ok) }
-                } else if case .open(let p) = outcome {
-                    let names = p.targets.map { t -> String in
-                        switch t { case .app(let a): a.name; case .site(let u): u.absoluteString }
-                    }
-                    print("outcome: open \(names) windows=\(p.windowsEach) layout=\(p.layout.rawValue) \(ms)")
-                    if exec { await WindowManager.run(p); print("executed, AX trusted:", HotkeyMonitor.hasAccessibility) }
-                } else if case .settings(let page, let action) = outcome {
-                    print("outcome: settings \(page.key) \(action.rawValue) \(ms)")
-                    if exec {
-                        let r = SettingsController.perform(page, action: action)
-                        print("executed: \(r.title) \(r.detail ?? "")")
-                        try? await Task.sleep(for: .seconds(1))   // let deferred activation run
-                    }
-                } else if case .media(let action, let preferred, let query) = outcome {
-                    print("outcome: media \(action.rawValue) preferred=\(preferred ?? "-") query=\(query ?? "-") \(ms)")
-                    if exec {
-                        let r = await MediaController.perform(action, preferred: preferred, query: query)
-                        print("executed: \(r.player?.name ?? "media key") — \(r.title) \(r.detail ?? "")")
-                    }
-                } else if case .agent(let request) = outcome {
-                    print("outcome: agent \(ms)")
-                    if exec {
-                        Agent.dryRun = true
-                        Agent.runCommand = { c in print("   run_command:", c); return "Done" }
-                        Agent.typeText = { t in print("   type_text:", t) }
-                        let t = Date()
-                        for d in try await Agent.run(request, app: front, client: TypeSafeClient(apiKey: key)) { print("   done: \(d.text)") }
-                        print("   (\(Int(Date().timeIntervalSince(t) * 1000)) ms)")
-                    }
-                } else if case .navigate(let a) = outcome {
-                    print("outcome: navigate \(a.rawValue) \(ms)")
-                    if exec { let r = await KeyCommands.perform(a, in: front); print("executed: \(r.title)"); try? await Task.sleep(for: .seconds(0.5)) }
-                } else if case .screen(let a, let request) = outcome {
-                    print("outcome: screen \(a.rawValue) \(ms)")
-                    if exec {
-                        let t = Date()
-                        guard let (text, selected) = await ScreenReader.text(of: front) else { print("no text (screen recording?)"); exit(0) }
-                        print("   read \(text.count) chars, selected=\(selected) (\(Int(Date().timeIntervalSince(t) * 1000)) ms)")
-                        let t2 = Date()
-                        let answer = try await ScreenReader.answer(a, request: request, text: text, app: front?.localizedName)
-                        print("   answer (\(Int(Date().timeIntervalSince(t2) * 1000)) ms): \(answer)")
-                    }
-                } else {
-                    print("outcome:", outcome, ms)
-                }
-            } catch { print("error:", error.localizedDescription) }
-            exit(0)
-        }
-        RunLoop.main.run()
     }
 }
 
@@ -271,6 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AudioOutput.warm()
         if Installer.offerMoveToApplications() { return }
         AppCatalog.shared.reload()
+        ScreenMemory.shared.start()
 
         let panel = NotchPanel(rootView: NotchView(model: model))
         panel.orderFrontRegardless()
@@ -319,6 +95,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if let app = ProcessInfo.processInfo.environment["CTRL_MEETING_PROMPT"] {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { Meetings.shared.simulateAsk(app) }
+        }
+        if let lines = ProcessInfo.processInfo.environment["CTRL_CLEAN"] {   // show how spoken text is tidied before typing
+            for l in lines.components(separatedBy: "|") { print("“\(l)” → “\(Typer.clean(l))”") }; exit(0)
+        }
+        if let lines = ProcessInfo.processInfo.environment["CTRL_SEARCH"] {   // how search phrases parse: site + query + URL
+            for l in lines.components(separatedBy: "|") { print("“\(l)” →", WebSearch.parse(l).map { "\($0.engine): “\($0.query)” \($0.url)" } ?? "nil") }; exit(0)
+        }
+        if let lines = ProcessInfo.processInfo.environment["CTRL_SPLIT"] {   // print how sentences split into steps, then quit
+            Task { for l in lines.components(separatedBy: "|") { print("“\(l)” →", await StepSplitter.split(l)) }; exit(0) }
+        }
+        if let f = ProcessInfo.processInfo.environment["CTRL_TRANSCRIBE"] {   // re-run Gemini on this meeting folder
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { Meetings.shared.retranscribeLast(folder: URL(fileURLWithPath: f)) }
+        }
+        if let m = ProcessInfo.processInfo.environment["CTRL_RECORDING_AT"].flatMap(Double.init) {   // minutes in: the recording pill alone
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.model.recording = NotchModel.Recording(app: "Demo", since: Date().addingTimeInterval(-m * 60)) }
         }
         if ProcessInfo.processInfo.environment["CTRL_RECORDING_STATES"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.model.recordingStatesDemo() }
@@ -379,6 +170,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "Settings…", action: #selector(editRoutines), keyEquivalent: ",")
         recordItem = menu.addItem(withTitle: "Record Meeting", action: #selector(toggleRecording), keyEquivalent: "")
         menu.addItem(withTitle: "Meeting Notes", action: #selector(openMeetings), keyEquivalent: "")
+        screenMemoryItem = menu.addItem(withTitle: "Remember My Screen", action: #selector(toggleScreenMemory), keyEquivalent: "")
+        screenMemoryItem?.state = ScreenMemory.shared.enabled ? .on : .off
+        menu.addItem(withTitle: "Forget Screen History", action: #selector(forgetScreen), keyEquivalent: "")
         menu.delegate = self
         let tree = menu.addItem(withTitle: "Decision Tree", action: #selector(toggleDecisionTree), keyEquivalent: "d")
         tree.keyEquivalentModifierMask = [.command, .option]
@@ -394,7 +188,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var decisionTreeItem: NSMenuItem?
     private var recordItem: NSMenuItem?
+    private var screenMemoryItem: NSMenuItem?
     private var developerObserver: NSObjectProtocol?
+
+    @objc private func toggleScreenMemory() {
+        ScreenMemory.shared.enabled.toggle()
+        screenMemoryItem?.state = ScreenMemory.shared.enabled ? .on : .off
+    }
+    @objc private func forgetScreen() { ScreenMemory.shared.forgetAll() }
 
     @objc private func toggleRecording() { Meetings.shared.toggle() }
     @objc private func openMeetings() { Meetings.openFolder() }
@@ -439,5 +240,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 extension AppDelegate: NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         recordItem?.title = Meetings.shared.recordingApp.map { "Stop Recording · \($0)" } ?? "Record Meeting"
+        screenMemoryItem?.state = ScreenMemory.shared.enabled ? .on : .off   // Settings may have toggled it
     }
 }

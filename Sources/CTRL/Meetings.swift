@@ -65,7 +65,7 @@ final class Meetings {
     // MARK: detection
 
     /// Apps whose mic use means "in a call".
-    private static let callApps: [(prefix: String, name: String)] = [
+    nonisolated private static let callApps: [(prefix: String, name: String)] = [
         ("us.zoom", "Zoom"), ("com.microsoft.teams", "Teams"), ("com.tinyspeck.slackmacgap", "Slack"),
         ("com.apple.FaceTime", "FaceTime"), ("com.hnc.Discord", "Discord"), ("com.cisco.webex", "Webex"),
         ("com.webex", "Webex"), ("net.whatsapp", "WhatsApp"), ("com.whatsapp", "WhatsApp"), ("ru.keepcoder.Telegram", "Telegram"),
@@ -74,7 +74,7 @@ final class Meetings {
     /// Browsers (Meet, Teams web, Whereby…): their mic use counts at once during a calendar meeting, else after 15 s
     /// (a voice note or push-to-talk on a website is shorter). The name comes from the app bundle the helper lives in:
     /// Dia and Arc share `company.thebrowser.browser.helper`.
-    private static let browsers: [(prefix: String, name: String)] = [
+    nonisolated private static let browsers: [(prefix: String, name: String)] = [
         ("com.google.Chrome", "Chrome"), ("company.thebrowser.dia", "Dia"), ("company.thebrowser", "Arc"),
         ("com.apple.WebKit", "Safari"), ("com.apple.Safari", "Safari"), ("org.mozilla", "Firefox"),
         ("com.brave", "Brave"), ("com.microsoft.edgemac", "Edge"), ("com.operasoftware", "Opera"), ("com.vivaldi", "Vivaldi"),
@@ -272,9 +272,11 @@ final class Meetings {
                 try (header + "_No Gemini API key: add one in Butterfly Settings, then choose Transcribe Last Meeting._\n").write(to: transcript, atomically: true, encoding: .utf8)
                 emit(.failed("Recorded, but no Gemini key to transcribe")); return
             }
-            let text = try await MeetingTranscriber.transcribe(audio, title: s.event?.title, attendees: attendees, key: key)
+            let text = try await MeetingTranscriber.transcribe(.init(mixed: audio, sides: s.recorder.sides), title: s.event?.title, attendees: attendees, me: Self.myName, key: key)
             try (header + text + "\n").write(to: transcript, atomically: true, encoding: .utf8)
-            emit(.saved(title: title, folder: folder))
+            // No calendar event: the folder is named after the app ("Slack"). Name it after what was actually discussed.
+            let (named, finalTitle) = s.event == nil ? await Self.titleFromTranscript(folder, text: text, key: key) : (folder, title)
+            emit(.saved(title: finalTitle, folder: named))
         } catch {
             try? (header + "_Transcription failed: \(error.localizedDescription)_\n").write(to: transcript, atomically: true, encoding: .utf8)
             emit(.failed(error.localizedDescription))
@@ -282,10 +284,10 @@ final class Meetings {
     }
 
     /// Re-run Gemini on the newest recording (after adding a key, or if it failed).
-    func retranscribeLast() {
+    func retranscribeLast(folder: URL? = nil) {
         let fm = FileManager.default
         guard let dirs = try? fm.contentsOfDirectory(at: Self.root, includingPropertiesForKeys: [.creationDateKey]),
-              let last = dirs.filter({ fm.fileExists(atPath: $0.appendingPathComponent("meeting.m4a").path) })
+              let last = folder ?? dirs.filter({ fm.fileExists(atPath: $0.appendingPathComponent("meeting.m4a").path) })
                   .max(by: { $0.lastPathComponent < $1.lastPathComponent }),
               let key = Keychain.geminiKey else { emit(.failed("No recording or no Gemini key")); return }
         let transcript = last.appendingPathComponent("transcript.md")
@@ -294,10 +296,56 @@ final class Meetings {
         let title = String(last.lastPathComponent.dropFirst(17))
         Task {
             do {
-                let text = try await MeetingTranscriber.transcribe(last.appendingPathComponent("meeting.m4a"), title: title, attendees: [], key: key)
+                let me = last.appendingPathComponent("me.m4a"), them = last.appendingPathComponent("them.m4a")
+                let both = fm.fileExists(atPath: me.path) && fm.fileExists(atPath: them.path)
+                let text = try await MeetingTranscriber.transcribe(.init(mixed: last.appendingPathComponent("meeting.m4a"), sides: both ? (me, them) : nil),
+                                                                   title: title, attendees: [], me: Self.myName, key: key)
                 try (header + text + "\n").write(to: transcript, atomically: true, encoding: .utf8)
-                emit(.saved(title: title, folder: last))
+                let (named, finalTitle) = Self.appNames.contains(title) ? await Self.titleFromTranscript(last, text: text, key: key) : (last, title)
+                emit(.saved(title: finalTitle, folder: named))
             } catch { emit(.failed(error.localizedDescription)) }
+        }
+    }
+
+    /// Who's on the mic track: the Mac's account name.
+    static var myName: String { NSFullUserName().isEmpty ? "Me" : NSFullUserName() }
+
+    /// Folder names that are just the call app, not a meeting title.
+    nonisolated static let appNames: Set<String> = {
+        var n = Set(callApps.map(\.name)).union(["Google Meet", "Whereby", "Jitsi", "Slack huddle", "Microsoft Teams"])
+        for b in browsers.map(\.name) { n.insert(b); n.insert(b + " call") }
+        return n
+    }()
+
+    /// Asks Gemini for a title from the transcript, renames the folder "2026-10-29 13.00 Slack" → "2026-10-29 13.00 <title>"
+    /// and fixes the "# title" line. Returns (folder, title); unchanged if anything fails.
+    static func titleFromTranscript(_ folder: URL, text: String, key: String) async -> (URL, String) {
+        let stamp = String(folder.lastPathComponent.prefix(16))
+        let old = String(folder.lastPathComponent.dropFirst(17))
+        guard text != MeetingTranscriber.noSpeech, text.count > 600,   // a minute of chatter has no topic to name
+              let raw = try? await MeetingTranscriber.title(for: text, key: key) else { return (folder, old) }
+        let title = raw.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+        guard title != old else { return (folder, old) }
+        var dest = root.appendingPathComponent("\(stamp) \(title)", isDirectory: true)
+        if FileManager.default.fileExists(atPath: dest.path) { dest = root.appendingPathComponent("\(stamp) \(title) (\(stamp.suffix(5)))", isDirectory: true) }
+        let transcript = folder.appendingPathComponent("transcript.md")
+        if let md = try? String(contentsOf: transcript, encoding: .utf8), md.hasPrefix("# \(old)\n") {
+            try? ("# \(title)\n" + md.dropFirst("# \(old)\n".count)).write(to: transcript, atomically: true, encoding: .utf8)
+        }
+        do { try FileManager.default.moveItem(at: folder, to: dest) } catch { return (folder, title) }
+        return (dest, title)
+    }
+
+    /// Older recordings still named after the app: give them titles too (runs once at launch, in the background).
+    static func nameUntitledFolders() {
+        guard let key = Keychain.geminiKey, let dirs = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { return }
+        Task.detached(priority: .background) {
+            for d in dirs where appNames.contains(String(d.lastPathComponent.dropFirst(17))) {
+                let md = d.appendingPathComponent("transcript.md")
+                guard let text = try? String(contentsOf: md, encoding: .utf8), !text.contains("_Transcription failed"), !text.contains("_No Gemini API key") else { continue }
+                let body = text.range(of: "\n\n").map { String(text[$0.upperBound...]) } ?? text   // after the header block
+                _ = await titleFromTranscript(d, text: body, key: key)
+            }
         }
     }
 

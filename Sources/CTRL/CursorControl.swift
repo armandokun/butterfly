@@ -52,14 +52,18 @@ enum CursorControl {
         let winFrame = frame(window) ?? .zero
         var openTabs: Set<String> = []
         var fields: [(AXUIElement, CGRect)] = []
+        var prompt: AXUIElement?   // the composer proper: Cursor labels it "Prompt"
 
         var pending: (label: String, el: AXUIElement, frame: CGRect?)?   // a sidebar button waiting for its age text
 
-        func walk(_ el: AXUIElement, depth: Int) {
+        func walk(_ el: AXUIElement, depth: Int, webAreas: Int = 0) {
             guard depth < 45, visited < 6000, Date() < deadline else { return }
             visited += 1
             let role: String = attr(el, kAXRoleAttribute) ?? ""
             let f = frame(el)
+            // Cursor's own UI is one web area; its built-in browser is a web area nested inside it. Never type into a page.
+            let webAreas = webAreas + (role == "AXWebArea" ? 1 : 0)
+            if webAreas > 1 { return }
             if role == "AXButton" {
                 let label = [attr(el, kAXTitleAttribute) as String?, attr(el, kAXDescriptionAttribute) as String?].compactMap { $0 }.first { !$0.isEmpty } ?? texts(el).first ?? ""
                 if ProcessInfo.processInfo.environment["CTRL_DUMP"] == "3" { print("  btn[\(section)] \(label)") }
@@ -87,18 +91,21 @@ enum CursorControl {
                     pending = nil
                 }
             }
-            if role == "AXTextArea" || role == "AXTextField", let f, f.minX > sidebarMaxX { fields.append((el, f)) }
+            if role == "AXTextArea" || role == "AXTextField", let f, f.minX > sidebarMaxX {
+                fields.append((el, f))
+                if (attr(el, kAXDescriptionAttribute) as String?) == "Prompt" { prompt = el }
+            }
             // Long transcripts: skip what's scrolled out of the window.
             if let f, depth > 6, !f.intersects(winFrame) { return }
-            for k in (attr(el, kAXChildrenAttribute) as [AXUIElement]?) ?? [] { walk(k, depth: depth + 1) }
+            for k in (attr(el, kAXChildrenAttribute) as [AXUIElement]?) ?? [] { walk(k, depth: depth + 1, webAreas: webAreas) }
         }
         walk(window, depth: 0)
         for i in s.chats.indices where openTabs.contains(s.chats[i].title) { s.chats[i].current = true }
         if ProcessInfo.processInfo.environment["CTRL_DUMP"] == "3" {
             print("  projects:", Set(s.chats.compactMap(\.project)), "newAgent:", Array(s.newAgent.keys), "tabs:", openTabs)
         }
-        s.composer = fields.max { $0.1.minY < $1.1.minY }?.0   // the chat box sits at the bottom
-        return s.chats.isEmpty ? nil : s
+        s.composer = prompt ?? fields.max { $0.1.minY < $1.1.minY }?.0   // "Prompt", else the lowest box (the chat box sits at the bottom)
+        return s.chats.isEmpty && s.composer == nil ? nil : s
     }
 
     /// Options for "which conversation": title, project, how long ago.

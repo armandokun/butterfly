@@ -58,6 +58,49 @@ enum Typer {
 
     private static func finish(_ raw: String) -> Text? { finishText(raw).flatMap { $0.text.isEmpty ? nil : $0 } }
 
+    /// ~/Library/Logs/Butterfly/typing.log: what was heard and what was typed (to debug the cleaner).
+    private static func log(_ kind: String, raw: String, out: String) {
+        let dir = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("Logs/Butterfly")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("typing.log")
+        let line = Data("\(Date().formatted(.iso8601)) \(kind) in:  “\(raw)”\n\(String(repeating: " ", count: 26))out: “\(out)”\n".utf8)
+        if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(line); try? h.close() } else { try? line.write(to: url) }
+    }
+
+    /// Spoken text as written text: no "um"/"uh", no stutters ("I I think" → "I think"), tidy punctuation.
+    static func clean(_ raw: String) -> String {
+        var t = raw
+        // Fillers, with the comma or period the recognizer attached to them.
+        let filler = #"(um+|uh+|uhm+|er+m*|hm+|mm+|ah+|eh+|ehm+)"#
+        // ", um, " between two commas: drop both, unless the word before is a discourse marker whose comma should stay ("Okay, um, just…").
+        t = t.replacingOccurrences(of: #"(?i)\b(okay|ok|well|so|yes|no|right|now|alright|actually|anyway),\s*"# + filler + #",\s*"#, with: "$1, ", options: .regularExpression)
+        t = t.replacingOccurrences(of: #"(?i),\s*"# + filler + #",(?=\s)"#, with: "", options: .regularExpression)
+        t = t.replacingOccurrences(of: #"(?i)(^|[\s,.])"# + filler + #"([,.]?)(?=\s|$|[,.!?])"#, with: "$1", options: .regularExpression)
+        // Doubled words ("the the", "I I", "now now") — not ones people double on purpose.
+        let keep: Set<String> = ["no", "very", "really", "bye", "ha", "so", "yes", "okay", "ok", "please"]
+        if let re = try? NSRegularExpression(pattern: #"\b(\w+)([,.]?\s+)\1\b(?![\w'])"#, options: .caseInsensitive) {
+            var out = t
+            for m in re.matches(in: t, range: NSRange(t.startIndex..., in: t)).reversed() {
+                guard let whole = Range(m.range, in: t), let word = Range(m.range(at: 1), in: t), !keep.contains(t[word].lowercased()) else { continue }
+                out.replaceSubrange(whole, with: t[word])
+            }
+            t = out
+        }
+        // Leftover punctuation: " ," / ", ," / leading comma / double spaces.
+        t = t.replacingOccurrences(of: #"\s+([,.!?])"#, with: "$1", options: .regularExpression)
+        t = t.replacingOccurrences(of: #"([,.!?])(?:\s*[,.])+"#, with: "$1", options: .regularExpression)
+        t = t.replacingOccurrences(of: #"^[,.\s]+"#, with: "", options: .regularExpression)
+        t = t.replacingOccurrences(of: #"\s{2,}"#, with: " ", options: .regularExpression).trimmingCharacters(in: .whitespaces)
+        if let f = t.first, f.isLowercase, raw.first?.isUppercase == true { t = f.uppercased() + t.dropFirst() }
+        // A removed "Um." / "Eh," left the next sentence starting in lowercase.
+        if let re = try? NSRegularExpression(pattern: #"([.!?]\s+)(\p{Ll})"#) {
+            for m in re.matches(in: t, range: NSRange(t.startIndex..., in: t)).reversed() {
+                if let r = Range(m.range(at: 2), in: t) { t.replaceSubrange(r, with: t[r].uppercased()) }
+            }
+        }
+        return t.isEmpty ? raw : t
+    }
+
     /// Splits off "…and press enter" / "send it". Text may come back empty ("press enter" alone).
     static func finishText(_ raw: String) -> Text? {
         let bare = raw.lowercased().trimmingCharacters(in: CharacterSet.punctuationCharacters.union(.whitespaces))
@@ -81,6 +124,11 @@ enum Typer {
 
     /// Types Unicode text into the focused field (any language, emoji; no clipboard involved).
     static func type(_ text: String, pressReturn: Bool) async {
+        // Keep the leading space that joins this to the previous sentence; tidy the rest.
+        let lead = text.prefix { $0 == " " }
+        let heard = String(text.dropFirst(lead.count))
+        let text = lead + clean(heard)
+        log("typed", raw: heard, out: String(text))
         let src = CGEventSource(stateID: .hidSystemState)
         let utf16 = Array(text.utf16)
         var i = 0
