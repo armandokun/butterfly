@@ -18,7 +18,8 @@ final class DebugRecorder {
 
     struct AppInfo: Codable { var name: String?; var bundle: String?; var version: String? }
     struct Node: Codable { var kind: String; var title: String; var detail: String?; var ms: Int?; var p: Double?; var at: Int; var children: [Node] }
-    struct Click: Codable { var what: String; var x: Int; var y: Int; var done: Double?; var retryX: Int?; var retryY: Int?; var retryDone: Double?; var shots: [String] = [] }
+    struct Click: Codable { var what: String; var x: Int; var y: Int; var done: Double?; var retryX: Int?; var retryY: Int?; var retryDone: Double?; var shots: [String] = []
+        var hit: String?; var ax: String?; var verifiedBy: String?; var disposition: String? }   // hit-test owner, AX fingerprint diff, ax/screenshot, notDelivered…
     struct Record: Codable {
         var id: String
         var folder: String
@@ -281,9 +282,11 @@ final class DebugRecorder {
         r.nodes.forEach { walk($0, 0) }
         o += "```\n\n## What happened\n\n" + (r.actions.isEmpty ? "- (nothing executed)\n" : r.actions.map { "- \($0)\n" }.joined())
         if !r.clicks.isEmpty {
-            o += "\n## Click checks (before/after screenshots judged by the model; done ≥ 0.5 = worked)\n\n"
+            o += "\n## Click checks (AX fingerprint first, else before/after screenshots judged by the model; done ≥ 0.5 = worked)\n\n"
             for c in r.clicks {
-                o += "- “\(c.what)” at (\(c.x), \(c.y)): done \(c.done.map { String(format: "%.2f", $0) } ?? "not checked")"
+                o += "- “\(c.what)” at (\(c.x), \(c.y)): \(c.disposition ?? "?") via \(c.verifiedBy ?? "-"), done \(c.done.map { String(format: "%.2f", $0) } ?? "not checked")"
+                if let h = c.hit { o += " · hit \(h)" }
+                if let a = c.ax { o += " · AX: \(a)" }
                 if let x = c.retryX, let y = c.retryY { o += " → retry at (\(x), \(y)): done \(c.retryDone.map { String(format: "%.2f", $0) } ?? "?")" }
                 o += c.shots.map { " · [\($0)](\($0))" }.joined() + "\n"
             }

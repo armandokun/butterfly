@@ -183,6 +183,34 @@ enum CLI {
             print("\(e.role) “\(e.label.prefix(60))” [\(Int(f.minX)),\(Int(f.minY)) \(Int(f.width))x\(Int(f.height))] → click \(Int(f.midX)),\(Int(f.midY))")
             exit(0)
         }
+        // `--actionable Calendar "Today"` (or `--actionable widget "weather"`): resolves the element and runs the click gate; clicks nothing.
+        if let i = args.firstIndex(of: "--actionable"), i + 2 < args.count {
+            let label = args[(i + 2)...].joined(separator: " ")
+            var e: Clicker.Element?
+            if args[i + 1].lowercased() == "widget" { e = Clicker.widgetTarget(for: label) } else {
+                guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == args[i + 1] }) else { print("not running"); exit(1) }
+                let els = Clicker.elements(of: app)
+                e = els.first { $0.label == label } ?? els.first { $0.label.localizedCaseInsensitiveContains(label) }
+            }
+            guard let e else { print("no element “\(label)”"); exit(1) }
+            let f = e.frame
+            print("\(e.role) “\(e.label.prefix(60))” [\(Int(f.minX)),\(Int(f.minY)) \(Int(f.width))x\(Int(f.height))] via \(Clicker.usesPress(e) ? "AXPress" : "mouse click")")
+            Task { @MainActor in
+                let t0 = Date()
+                let g = await Clicker.actionable(e)
+                let ms = Int(Date().timeIntervalSince(t0) * 1000)
+                let p: CGPoint = if case .ok(let p, _) = g { p } else { CGPoint(x: f.midX, y: f.midY) }
+                print("\(g.message) → point \(Int(p.x)),\(Int(p.y)) · hit \(Clicker.hitOwner(at: p)) · \(ms) ms")
+                exit(0)
+            }
+            return true
+        }
+        // `--fingerprint Calendar`: the cheap AX state a click check compares before/after.
+        if let i = args.firstIndex(of: "--fingerprint"), i + 1 < args.count {
+            guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == args[i + 1] }) else { print("not running"); exit(1) }
+            print(Clicker.fingerprint(nil, app: app).summary)
+            exit(0)
+        }
         // `--ax-dump Slack [depth]`: prints the focused window's accessibility tree (debugging the settings crawl).
         if let i = args.firstIndex(of: "--ax-dump"), i + 1 < args.count {
             _ = NSApplication.shared

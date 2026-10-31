@@ -220,6 +220,8 @@ final class NotchModel: ObservableObject {
     private var dictating = false
     private var typedInDictation = false   // first dictated sentence gets no leading space
     private var lastActionDisplay: CGDirectDisplayID?
+    /// Why the last click didn't land (gate refused, wrong thing opened, missed after retry): a plan step stops on it.
+    private var clickFailure: String?
     private var pendingPlaylists: ([String], Date)?
     /// A planned action waiting for "yes" (destructive steps ask first).
     private var pendingPlan: (plan: Planner.Plan, request: String, at: Date)?
@@ -986,9 +988,10 @@ final class NotchModel: ObservableObject {
         show(.media(nil, title: r.name, detail: "done"), for: 1.4)
     }
 
-    /// Click, then look: before/after screenshots tell whether it did what was asked.
-    /// A miss gets one corrected retry; still wrong → say so instead of claiming "Clicked".
-    private func clickChecked(at p: CGPoint, what: String, _ click: () -> Void) async {
+    /// Click, then check: the AX fingerprint first (cheap, exact), before/after screenshots only when AX can't tell.
+    /// Disposition: verified · wrong (something else changed: never clicked again) · not delivered (nothing changed:
+    /// one corrected retry, except toggles and send/pay/delete-like buttons) · unverified.
+    private func clickChecked(at p: CGPoint, what: String, element: Clicker.Element? = nil, _ click: () -> Void) async {
         let display = Memory.display(at: p)
         lastActionDisplay = display
         let spoken = lastCommand ?? what
@@ -996,31 +999,67 @@ final class NotchModel: ObservableObject {
         let (runID, dbg) = (DecisionTrace.shared.currentID, DebugRecorder.shared)
         dbg.hold(runID); defer { dbg.release(runID) }
         let ci = dbg.click(what, at: p, run: runID)
+        let owner = Clicker.hitOwner(at: p)
+        dbg.clickUpdate(ci, run: runID) { $0.hit = owner }
         func shot() async -> Clicker.Shot? {
             guard let display, CGPreflightScreenCaptureAccess() else { return nil }
             return try? await Clicker.screenshot(region: CGDisplayBounds(display), display: display)
         }
-        let before = await shot()
+        func finish(_ d: String, by: String, _ title: String, _ symbol: String, failed: String? = nil) {
+            DecisionTrace.shared.add(.rule, "click \(d)", "via \(by)", run: runID)
+            dbg.clickUpdate(ci, run: runID) { $0.disposition = d; $0.verifiedBy = by }
+            if let failed { dbg.verdict("failed", by: failed, run: runID); clickFailure = title }
+            show(.system(symbol: symbol, title: title, detail: what), for: failed == nil ? 1.2 : 2.2)
+        }
+        let isToggle = element.map { Clicker.toggleRoles.contains($0.role) } ?? false
+        let fp = Clicker.fingerprint(element, app: frontApp)
+        // AX can settle toggles, tabs and buttons on its own: skip the screenshot for those.
+        let before = isToggle ? nil : await shot()
         dbg.shot(before, "before", click: ci, run: runID)
         click()
-        guard let router, let before else { show(.system(symbol: "cursorarrow.click", title: "Clicked", detail: what), for: 1.2); return }
         show(.system(symbol: "eye", title: "Clicked · checking…", detail: what), for: 6)
-        try? await Task.sleep(for: .milliseconds(700))
+        let (fp2, ax) = await Clicker.settle(element, from: fp, app: frontApp)
+        dbg.clickUpdate(ci, run: runID) { $0.ax = ax.why }
+        DecisionTrace.shared.add(.rule, "click AX check", ax.why, run: runID)
+        if case .verified(let why) = ax { return finish("deliveredVerified", by: "ax: \(why)", "Done", "checkmark.circle") }
+        // A toggle that didn't flip: re-read, never press it again (a second press could flip it the wrong way).
+        if isToggle {
+            try? await Task.sleep(for: .milliseconds(250))
+            let again = element.flatMap { Clicker.fingerprint($0, app: frontApp).value }
+            if again != fp.value { return finish("deliveredVerified", by: "ax re-read", "Done", "checkmark.circle") }
+            return finish("notDelivered", by: "ax: toggle value unchanged", "It didn't change", "exclamationmark.triangle", failed: "toggle “\(what)” didn't flip")
+        }
+        let axChanged = fp2 != fp
+        guard let router, let before else {
+            return finish("deliveredUnverified", by: axChanged ? "ax: \(ax.why)" : "none", "Clicked", "cursorarrow.click")
+        }
+        try? await Task.sleep(for: .milliseconds(100))   // the AX wait already covered most of the screen's settling
         let after = await shot()
         dbg.shot(after, "after", click: ci, run: runID)
         guard let after, let check = try? await router.verifyClick(spoken, clicked: what, before: before, after: after) else {
-            show(.system(symbol: "cursorarrow.click", title: "Clicked", detail: what), for: 1.2); return
+            return finish("deliveredUnverified", by: "screenshot check failed", "Clicked", "cursorarrow.click")
         }
         DecisionTrace.shared.add(.rule, "click check", String(format: "done %.2f", check.done), run: runID)
         dbg.clickUpdate(ci, run: runID) { $0.done = check.done }
-        if check.done >= 0.5 { show(.system(symbol: "checkmark.circle", title: "Done", detail: what), for: 1.2); return }
+        if check.done >= 0.5 { return finish("deliveredVerified", by: String(format: "screenshot %.2f", check.done), "Done", "checkmark.circle") }
+        // Something happened, just not the asked thing: clicking again would stack a second wrong action.
+        if axChanged {
+            return finish("deliveredWrong", by: String(format: "ax changed (%@), screenshot %.2f", ax.why, check.done), "That opened the wrong thing", "exclamationmark.triangle",
+                          failed: "click on “\(what)” changed \(ax.why) but not what was asked")
+        }
+        if Clicker.risky(what) {
+            return finish("notDelivered", by: String(format: "screenshot %.2f, no retry (risky label)", check.done), "Clicked, but it didn't seem to work", "exclamationmark.triangle",
+                          failed: String(format: "click check done %.2f, not retried: “%@” may have gone through", check.done, what))
+        }
+        DecisionTrace.shared.add(.rule, "click notDelivered", "retrying", run: runID)
+        dbg.clickUpdate(ci, run: runID) { $0.disposition = "notDelivered" }
         // Retry spot: the zoomed locator (precise), told the first spot missed; never the same spot again.
         let hint = "\(spoken) (a click at \(Int(p.x)),\(Int(p.y)) on screen missed it)"
         let located = frontApp.flatMap { app in Task { try? await router.locate(hint, in: app) } }
         let retry = (await located?.value ?? nil).flatMap { hypot($0.x - p.x, $0.y - p.y) > 12 ? $0 : nil }
         guard let retry else {
-            dbg.verdict("failed", by: String(format: "click check done %.2f, no other spot to retry", check.done), run: runID)
-            show(.system(symbol: "exclamationmark.triangle", title: "Clicked, but it didn't seem to work", detail: what), for: 2.2); return
+            return finish("notDelivered", by: String(format: "screenshot %.2f, no other spot", check.done), "Clicked, but it didn't seem to work", "exclamationmark.triangle",
+                          failed: String(format: "click check done %.2f, no other spot to retry", check.done))
         }
         dbg.clickUpdate(ci, run: runID) { $0.retryX = Int(retry.x); $0.retryY = Int(retry.y) }
         show(.system(symbol: "arrow.uturn.right", title: "Missed · retrying", detail: what), for: 6)
@@ -1033,11 +1072,12 @@ final class NotchModel: ObservableObject {
             dbg.clickUpdate(ci, run: runID) { $0.retryDone = c2.done }
             DecisionTrace.shared.add(.rule, "click check (retry)", String(format: "done %.2f", c2.done), run: runID)
             if c2.done < 0.5 {
-                dbg.verdict("failed", by: String(format: "click check done %.2f after retry", c2.done), run: runID)
-                return show(.system(symbol: "exclamationmark.triangle", title: "Couldn't hit it", detail: what), for: 2.2)
+                return finish("notDelivered", by: String(format: "retry screenshot %.2f", c2.done), "Couldn't hit it", "exclamationmark.triangle",
+                              failed: String(format: "click check done %.2f after retry", c2.done))
             }
+            return finish("deliveredVerified", by: String(format: "retry screenshot %.2f", c2.done), "Done", "checkmark.circle")
         }
-        show(.system(symbol: "checkmark.circle", title: "Done", detail: what), for: 1.2)
+        finish("deliveredUnverified", by: "retry not checked", "Clicked", "cursorarrow.click")
     }
 
     private func perform(_ outcome: CommandRouter.Outcome) async {
@@ -1132,7 +1172,14 @@ final class NotchModel: ObservableObject {
                 show(.system(symbol: "doc.questionmark", title: text, detail: nil), for: 1.8)
             case .click(let el):
                 frontApp?.activate()
-                await clickChecked(at: CGPoint(x: el.frame.midX, y: el.frame.midY), what: el.label) { Clicker.press(el) }
+                let gate = await Clicker.actionable(el)
+                guard case .ok(let p, let e) = gate else {
+                    DecisionTrace.shared.add(.error, "click gate", "\(gate.message): “\(el.label)”")
+                    DebugRecorder.shared.action("click gate refused “\(el.label)”: \(gate.message)")
+                    clickFailure = gate.message
+                    show(.system(symbol: "hand.raised", title: gate.message, detail: el.label), for: 2.2); break
+                }
+                await clickChecked(at: p, what: e.label, element: e) { Clicker.press(e, at: p) }
             case .clickVisual(let app, let what):
                 show(.system(symbol: "eye", title: "Looking…", detail: what), for: 15)
                 app.activate()
@@ -1449,7 +1496,10 @@ final class NotchModel: ObservableObject {
             DebugRecorder.shared.action("plan step “\(command)” → \(Self.describe(o))")
             switch o {
             case .notACommand, .unsure: return "failed: not understood"
-            default: await self.perform(o); return "ok"
+            default:
+                self.clickFailure = nil
+                await self.perform(o)
+                return self.clickFailure.map { "failed: \($0)" } ?? "ok"
             }
         }
         Planner.openURL = { [weak self] url in self?.openSite(url) }

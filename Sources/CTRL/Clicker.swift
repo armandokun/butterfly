@@ -99,21 +99,211 @@ enum Clicker {
         return (true, v?.intValue)
     }
 
-    static func press(_ e: Element) {
-        RunVideo.shared.ring(at: CGPoint(x: e.frame.midX, y: e.frame.midY))
-        let actions: [String] = {
-            var names: CFArray?
-            AXUIElementCopyActionNames(e.element, &names)
-            return (names as? [String]) ?? []
-        }()
-        // Text fields / rows / text have no reliable press: click their center like a person would.
-        // A day cell's middle is covered by its events: click the empty date strip at the top.
-        if e.role == "AXList" { click(at: CGPoint(x: e.frame.midX, y: e.frame.minY + 8)); return }
-        if actions.contains(kAXPressAction as String), !["AXTextField", "AXTextArea", "AXStaticText", "AXCell", "AXRow", "AXImage", "AXSearchField", "AXComboBox"].contains(e.role) {
-            AXUIElementPerformAction(e.element, kAXPressAction as CFString)
-        } else {
-            click(at: CGPoint(x: e.frame.midX, y: e.frame.midY))
+    /// Pressed via AXPress (works even when covered) rather than a real mouse click.
+    /// Text fields / rows / text have no reliable press: click them like a person would.
+    static func usesPress(_ e: Element) -> Bool {
+        var names: CFArray?
+        AXUIElementCopyActionNames(e.element, &names)
+        return e.role != "AXList" && ((names as? [String]) ?? []).contains(kAXPressAction as String)
+            && !["AXTextField", "AXTextArea", "AXStaticText", "AXCell", "AXRow", "AXImage", "AXSearchField", "AXComboBox"].contains(e.role)
+    }
+
+    /// `p`: the gate's unobstructed point (default: center; a day cell's empty date strip, its middle is covered by events).
+    static func press(_ e: Element, at p: CGPoint? = nil) {
+        let p = p ?? (e.role == "AXList" ? CGPoint(x: e.frame.midX, y: e.frame.minY + 8) : CGPoint(x: e.frame.midX, y: e.frame.midY))
+        if usesPress(e) { RunVideo.shared.ring(at: p); AXUIElementPerformAction(e.element, kAXPressAction as CFString) } else { click(at: p) }
+    }
+
+    // MARK: Actionability gate
+
+    enum Actionable {
+        case ok(CGPoint, Element)
+        case covered(by: String)
+        case disabled, gone, unstable
+        var message: String {
+            switch self {
+            case .ok: "OK"
+            case .covered(let by): "It's covered by \(by)"
+            case .disabled: "It's disabled"
+            case .gone: "It's gone"
+            case .unstable: "It keeps moving"
+            }
         }
+    }
+
+    private static let systemWide: AXUIElement = { let s = AXUIElementCreateSystemWide(); AXUIElementSetMessagingTimeout(s, 0.25); return s }()
+    static var notificationCentrePID: pid_t? { NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.notificationcenterui").first?.processIdentifier }
+    static func pid(_ el: AXUIElement) -> pid_t { var p: pid_t = 0; AXUIElementGetPid(el, &p); return p }
+
+    private static func alive(_ el: AXUIElement) -> Bool {
+        var v: CFTypeRef?
+        return AXUIElementCopyAttributeValue(el, kAXRoleAttribute as CFString, &v) != .invalidUIElement
+    }
+
+    private static var screens: [CGRect] {
+        var ids = [CGDirectDisplayID](repeating: 0, count: 16), n: UInt32 = 0
+        CGGetActiveDisplayList(16, &ids, &n)
+        return ids.prefix(Int(n)).map(CGDisplayBounds)
+    }
+
+    /// The same element again (label + role, nearest frame) after the app rebuilt its tree.
+    private static func reresolve(_ e: Element) -> Element? {
+        let p = pid(e.element)
+        let pool = p == notificationCentrePID ? widgets().flatMap { [$0.group] + $0.items }
+            : NSRunningApplication(processIdentifier: p).map(elements(of:)) ?? []
+        return pool.filter { $0.label == e.label && $0.role == e.role && hypot($0.frame.midX - e.frame.midX, $0.frame.midY - e.frame.midY) < 80 }
+            .min { hypot($0.frame.midX - e.frame.midX, $0.frame.midY - e.frame.midY) < hypot($1.frame.midX - e.frame.midX, $1.frame.midY - e.frame.midY) }
+    }
+
+    static func hit(at p: CGPoint) -> AXUIElement? {
+        var el: AXUIElement?
+        return AXUIElementCopyElementAtPosition(systemWide, Float(p.x), Float(p.y), &el) == .success ? el : nil
+    }
+
+    /// "Calendar · AXButton “Today”": what a real click at `p` would land on (for the log).
+    static func hitOwner(at p: CGPoint) -> String {
+        guard let h = hit(at: p) else { return "nothing" }
+        let role: String = attr(h, kAXRoleAttribute) ?? "?", l = label(of: h, role: role)
+        return (NSRunningApplication(processIdentifier: pid(h))?.localizedName ?? "pid \(pid(h))") + " · \(role)" + (l.isEmpty ? "" : " “\(l.prefix(40))”")
+    }
+
+    private static func ancestors(_ el: AXUIElement) -> [AXUIElement] {
+        var out: [AXUIElement] = [], cur = el
+        while out.count < 40, let up: AXUIElement = attr(cur, kAXParentAttribute) { out.append(up); cur = up }
+        return out
+    }
+
+    /// A click at `p` reaches `e`: the hit is it, inside it, or (same app) a container of it. Widgets: anything of Notification Centre.
+    private static func reaches(_ e: Element, at p: CGPoint) -> Bool {
+        let target = pid(e.element)
+        guard let h = hit(at: p) else { return false }
+        if target == notificationCentrePID { return pid(h) == target }
+        if CFEqual(h, e.element) || ancestors(h).contains(where: { CFEqual($0, e.element) }) { return true }
+        return pid(h) == target && ancestors(e.element).contains { CFEqual($0, h) }
+    }
+
+    /// Exists, visible, enabled, holding still, and not under another window — re-checked for ~400 ms before any element click.
+    /// AXPress doesn't need a clear path; real mouse clicks get the first unobstructed point (center, inner quadrants, top strip).
+    static func actionable(_ e0: Element) async -> Actionable {
+        var e = e0, last = Actionable.gone, prev: CGRect?, raised = false, resolved = false
+        var deadline = Date().addingTimeInterval(0.4)
+        let widget = pid(e.element) == notificationCentrePID
+        while true {
+            if !alive(e.element), !resolved, let r = reresolve(e) { (e, resolved) = (r, true); continue }
+            if !alive(e.element) { last = .gone }
+            else if let f = frame(of: e.element), f.width > 1, f.height > 1, screens.contains(where: { $0.intersects(f) }) {
+                e = Element(label: e.label, role: e.role, element: e.element, frame: f)
+                let (w, h) = (f.width / 4, f.height / 4)
+                let strip = CGPoint(x: f.midX, y: f.minY + min(8, f.height / 2))
+                let points = [CGPoint(x: f.midX, y: f.midY), CGPoint(x: f.minX + w, y: f.minY + h), CGPoint(x: f.maxX - w, y: f.minY + h),
+                              CGPoint(x: f.minX + w, y: f.maxY - h), CGPoint(x: f.maxX - w, y: f.maxY - h), strip]
+                if (attr(e.element, kAXEnabledAttribute) as Bool?) == false { last = .disabled }
+                else if prev != f { prev = f; last = .unstable }
+                else if usesPress(e) { return .ok(points[0], e) }
+                // Day cells: the date strip, then the bottom corners (events stack from the top and would open).
+                else if let p = (e.role == "AXList" ? [strip, points[3], points[4]] : points).first(where: { reaches(e, at: $0) }) { return .ok(p, e) }
+                else {
+                    last = .covered(by: hit(at: points[0]).flatMap { NSRunningApplication(processIdentifier: pid($0))?.localizedName } ?? "something")
+                    // Bring its window forward once and look again.
+                    if !raised, !widget, let win: AXUIElement = attr(e.element, kAXWindowAttribute) {
+                        raised = true
+                        AXUIElementPerformAction(win, kAXRaiseAction as CFString)
+                        deadline = max(deadline, Date().addingTimeInterval(0.25))
+                    }
+                }
+            } else { last = .gone }
+            if Date() > deadline { return last }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+    }
+
+    // MARK: Fingerprint (did the click land? read AX before looking)
+
+    struct Fingerprint: Equatable {
+        var value, selected, focused, expanded: String?   // the target's own state
+        var alive = true
+        var frontPID: pid_t = 0
+        var window: String?                               // focused window title
+        var focus: String?                                // focused element role + label
+        var windows = 0, sheets = 0
+        var summary: String {
+            "value=\(value ?? "-") selected=\(selected ?? "-") focused=\(focused ?? "-") expanded=\(expanded ?? "-") alive=\(alive) · front=\(NSRunningApplication(processIdentifier: frontPID)?.localizedName ?? "\(frontPID)") · window “\(window ?? "-")” · focus \(focus ?? "-") · \(windows) windows, \(sheets) sheets"
+        }
+    }
+
+    /// Cheap AX snapshot: the target's value/selected/focused/expanded, plus the front app's window, focus and window count.
+    static func fingerprint(_ e: Element?, app: NSRunningApplication?) -> Fingerprint {
+        func s(_ el: AXUIElement, _ k: String) -> String? { (attr(el, k) as CFTypeRef?).map { "\($0)" } }
+        var f = Fingerprint()
+        if let e {
+            f.alive = alive(e.element)
+            (f.value, f.selected, f.focused, f.expanded) = (s(e.element, kAXValueAttribute), s(e.element, kAXSelectedAttribute), s(e.element, kAXFocusedAttribute), s(e.element, kAXExpandedAttribute))
+        }
+        let front = NSWorkspace.shared.frontmostApplication
+        f.frontPID = front?.processIdentifier ?? 0
+        guard let app = app ?? front else { return f }
+        let ax = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(ax, 0.25)
+        let wins: [AXUIElement] = attr(ax, kAXWindowsAttribute) ?? []
+        f.windows = wins.count
+        if let w: AXUIElement = attr(ax, kAXFocusedWindowAttribute) {
+            f.window = attr(w, kAXTitleAttribute)
+            f.sheets = ((attr(w, kAXChildrenAttribute) as [AXUIElement]?) ?? []).filter { (attr($0, kAXRoleAttribute) as String?) == "AXSheet" }.count
+        }
+        if let fe: AXUIElement = attr(ax, kAXFocusedUIElementAttribute) {
+            let role: String = attr(fe, kAXRoleAttribute) ?? "?"
+            f.focus = role + " " + String(label(of: fe, role: role).prefix(40))
+        }
+        return f
+    }
+
+    enum AXCheck {
+        case verified(String), changed(String), unchanged
+        var why: String { switch self { case .verified(let s), .changed(let s): s; case .unchanged: "no change" } }
+    }
+    private static let selectRoles: Set<String> = ["AXTab", "AXRow", "AXCell", "AXList", "AXStaticText"]
+
+    /// Polls the fingerprint for up to `budget` after a click. Toggles must flip; tabs/rows/cells/day cells must become
+    /// selected (or move the window title / focus); buttons and links count any change. Widgets and visual clicks
+    /// (no element) only report whether anything changed: the screenshot check decides.
+    static func settle(_ e: Element?, from b: Fingerprint, app: NSRunningApplication?, budget: TimeInterval = 0.6) async -> (Fingerprint, AXCheck) {
+        let deadline = Date().addingTimeInterval(budget)
+        var a = b
+        while true {
+            try? await Task.sleep(for: .milliseconds(60))
+            a = fingerprint(e, app: app)
+            if let c = judge(e, b, a) { return (a, c) }
+            if Date() > deadline { return (a, a == b ? .unchanged : .changed(diff(b, a))) }
+        }
+    }
+
+    private static func judge(_ e: Element?, _ b: Fingerprint, _ a: Fingerprint) -> AXCheck? {
+        guard let e, pid(e.element) != notificationCentrePID else { return nil }
+        if toggleRoles.contains(e.role) { return a.value != b.value && a.value != nil ? .verified("value \(b.value ?? "-")→\(a.value!)") : nil }
+        if selectRoles.contains(e.role) {
+            if a.selected == "1", b.selected != "1" { return .verified("selected") }
+            return a.window != b.window || a.focus != b.focus ? .verified(diff(b, a)) : nil
+        }
+        return a != b ? .verified(diff(b, a)) : nil
+    }
+
+    static func diff(_ b: Fingerprint, _ a: Fingerprint) -> String {
+        var d: [String] = []
+        if a.frontPID != b.frontPID { d.append("front app → \(NSRunningApplication(processIdentifier: a.frontPID)?.localizedName ?? "?")") }
+        if a.window != b.window { d.append("window “\(a.window ?? "-")”") }
+        if a.windows != b.windows { d.append("windows \(b.windows)→\(a.windows)") }
+        if a.sheets != b.sheets { d.append("sheets \(b.sheets)→\(a.sheets)") }
+        if a.focus != b.focus { d.append("focus \(a.focus ?? "-")") }
+        if a.value != b.value { d.append("value → \(a.value ?? "-")") }
+        if a.selected != b.selected { d.append("selected → \(a.selected ?? "-")") }
+        if a.expanded != b.expanded { d.append("expanded → \(a.expanded ?? "-")") }
+        if a.alive != b.alive { d.append("target gone") }
+        return d.isEmpty ? "no change" : d.joined(separator: ", ")
+    }
+
+    /// Never clicked twice on our own: these may already have happened.
+    static func risky(_ label: String) -> Bool {
+        label.range(of: #"(?i)\b(send|submit|buy|pay|purchase|order|delete|remove|post|confirm|reply)\b"#, options: .regularExpression) != nil
     }
 
     // MARK: Desktop widgets
