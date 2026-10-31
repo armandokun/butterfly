@@ -43,7 +43,13 @@ enum Clicker {
             visited += 1
             let role: String = attr(el, kAXRoleAttribute) ?? ""
             if clickable.contains(role), let f = frame(of: el), f.width > 2, f.height > 2, winFrame.intersects(f) {
-                let label = label(of: el, role: role)
+                var label = label(of: el, role: role)
+                var f = f
+                if role == "AXList" {
+                    // Week view: day columns are labeled just "Monday"; their events carry the date ("… 26 October 2026 …").
+                    if weekdays.contains(label.lowercased()), let d = dateInside(el) { label += ", " + d }
+                    f = f.intersection(winFrame)   // columns run far off-window; click their visible top
+                }
                 if !label.isEmpty, label.count < 120 { out.append(Element(label: label, role: role, element: el, frame: f)) }
             }
             // Static text inside a button is the button's label; don't descend into it again.
@@ -53,6 +59,17 @@ enum Clicker {
         }
         walk(window, depth: 0)
         return out
+    }
+
+    private static let weekdays: Set<String> = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+    /// "26 October" from the first event label inside a day column that names a date.
+    private static func dateInside(_ el: AXUIElement) -> String? {
+        let kids: [AXUIElement] = attr(el, kAXChildrenAttribute) ?? []
+        for k in kids.prefix(12) {
+            let t = label(of: k, role: attr(k, kAXRoleAttribute) ?? "")
+            if let r = t.range(of: #"\b\d{1,2} (January|February|March|April|May|June|July|August|September|October|November|December)\b"#, options: .regularExpression) { return String(t[r]) }
+        }
+        return nil
     }
 
     /// Choice options for Jev, ranked by overlap with what was said.
