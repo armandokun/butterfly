@@ -174,9 +174,16 @@ final class DebugRecorder {
             r.lessoned = true
             let did = ([r.outcome].compactMap { $0 } + r.actions.suffix(3).map { $0.components(separatedBy: " · ").dropFirst().joined(separator: " · ") }).joined(separator: " → ")
             appendLesson(Lesson(said: r.said, app: r.app.name, did: did.isEmpty ? "nothing" : String(did.prefix(300)), why: correction ?? by, at: Date()))
-            if v == "declined", let p = r.skillPattern, let s = SkillStore.shared.skills.first(where: { $0.pattern == p }) {
+        }
+        // Any learned skill behind a declined/failed run goes, even if it was learned in this very run
+        // or the run already had a verdict ("failed" first, 👎 after).
+        if v == "declined" || v == "failed" {
+            var gone = Set<UUID>()
+            if let p = r.skillPattern, let s = SkillStore.shared.skills.first(where: { $0.pattern == p }) { gone.insert(s.id) }
+            if let (s, _) = SkillStore.shared.match(r.said) { gone.insert(s.id) }
+            for s in SkillStore.shared.skills where gone.contains(s.id) {
                 SkillStore.shared.forget(s)
-                r.actions.append("skill “\(p)” dropped (declined)")
+                r.actions.append("skill “\(s.pattern)” dropped (\(v))")
             }
         }
         records[id] = r
