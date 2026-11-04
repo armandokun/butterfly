@@ -18,14 +18,20 @@ APP=build/Butterfly.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 cp ".build/$CONFIG/CTRL" "$APP/Contents/MacOS/Butterfly"
-# Info.plist is shared with the Xcode project: fill in Xcode's $(VARIABLES) for CLI builds.
+# Info.plist is shared with the Xcode project: fill in Xcode's $(VARIABLES) for CLI builds (versions from project.yml).
+MV=$(awk '/MARKETING_VERSION:/{gsub(/"/,"",$2); print $2; exit}' project.yml)
+PV=$(awk '/CURRENT_PROJECT_VERSION:/{gsub(/"/,"",$2); print $2; exit}' project.yml)
 sed -e 's/$(EXECUTABLE_NAME)/Butterfly/g' -e 's/$(PRODUCT_BUNDLE_IDENTIFIER)/com.armandas.ctrl/g' \
     -e 's/$(PRODUCT_NAME)/Butterfly/g' -e 's/$(DEVELOPMENT_LANGUAGE)/en/g' -e 's/$(PRODUCT_BUNDLE_PACKAGE_TYPE)/APPL/g' \
-    -e 's/$(MARKETING_VERSION)/0.1.0/g' -e 's/$(CURRENT_PROJECT_VERSION)/1/g' -e 's/$(MACOSX_DEPLOYMENT_TARGET)/26.0/g' \
+    -e "s/\$(MARKETING_VERSION)/$MV/g" -e "s/\$(CURRENT_PROJECT_VERSION)/$PV/g" -e 's/$(MACOSX_DEPLOYMENT_TARGET)/26.0/g' \
     Resources/Info.plist > "$APP/Contents/Info.plist"
 # Now Playing for any app (mediaremote-adapter, BSD-3: github.com/ungive/mediaremote-adapter)
 mkdir -p "$APP/Contents/Resources"
 cp -R Resources/MediaRemoteAdapter "$APP/Contents/Resources/"
+# Self-updates (Sparkle). Dev builds don't check on their own: only releases (scripts/release.sh) do.
+mkdir -p "$APP/Contents/Frameworks"
+ditto ".build/$CONFIG/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"
+/usr/libexec/PlistBuddy -c "Set :SUEnableAutomaticChecks false" "$APP/Contents/Info.plist"
 cp Resources/Art/*.png "$APP/Contents/Resources/"
 # App icon: Icon Composer document (Liquid Glass; light/dark/tinted/clear) → Assets.car + .icns fallback.
 if xcrun --find actool >/dev/null 2>&1 && [[ -d /Applications/Xcode.app ]]; then
@@ -42,5 +48,6 @@ fi
 
 IDENTITY=${CTRL_SIGN_IDENTITY:-$(security find-identity -v -p codesigning | awk -F'"' '/Developer ID Application/{print $2; exit}')}
 codesign --force --sign "${IDENTITY:--}" "$APP/Contents/Resources/MediaRemoteAdapter/MediaRemoteAdapter.framework"
+codesign --force --deep --sign "${IDENTITY:--}" "$APP/Contents/Frameworks/Sparkle.framework"
 codesign --force --sign "${IDENTITY:--}" "$APP"
 echo "Built $APP (signed: ${IDENTITY:-ad-hoc})"
