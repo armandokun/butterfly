@@ -136,7 +136,7 @@ enum KeyCommands {
         }
     }
 
-    /// `typed`: what CTRL last typed (for "scratch that").
+    /// `typed`: what Butterfly last typed (for "scratch that").
     static func perform(_ a: Edit, in app: NSRunningApplication?, typed: String?) async -> Result {
         app?.activate()
         try? await Task.sleep(for: .milliseconds(60))

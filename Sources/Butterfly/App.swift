@@ -4,11 +4,12 @@ import Sparkle
 import SwiftUI
 
 @main
-struct CTRLMain {
+struct ButterflyMain {
     static func main() {
         // Debug flags (`--plan`, `--route`, `--skills`, …) run without the app: they print and exit.
         if CLI.run(CommandLine.arguments) { RunLoop.main.run(); return }
         AppDelegate.lastRun = CrashReporter.install()
+        Migration.run()
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
@@ -39,7 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         NSApplication.shared.addSceneRepresentation(scenes)
         self.scenes = scenes
-        // While Settings is open CTRL is a normal app (Dock icon), so macOS brings you to it,
+        // While Settings is open Butterfly is a normal app (Dock icon), so macOS brings you to it,
         // even from a full-screen app. Closing it goes back to menu-bar-only.
         NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { note in
             guard (note.object as? NSWindow)?.identifier?.rawValue.contains("Settings") == true else { return }
@@ -49,7 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        if ProcessInfo.processInfo.environment["CTRL_DEBUG"] == "1" { setlinebuf(stdout) }
+        if ProcessInfo.processInfo.environment["BUTTERFLY_DEBUG"] == "1" { setlinebuf(stdout) }
         AudioOutput.warm()
         if Installer.offerMoveToApplications() { return }
         AppCatalog.shared.reload()
@@ -80,68 +81,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let last = Self.lastRun { print(last) }
         if CommandLine.arguments.contains("--routines") { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.editRoutines() } }
 
-        if let b = ProcessInfo.processInfo.environment["CTRL_BADGE"]?.split(separator: "|").map(String.init), b.count == 2 {
+        if let b = ProcessInfo.processInfo.environment["BUTTERFLY_BADGE"]?.split(separator: "|").map(String.init), b.count == 2 {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.model.ambient(.badge(symbol: b[0], text: b[1], tint: .green), for: 4) }
         }
-        if let a = ProcessInfo.processInfo.environment["CTRL_SYSTEM"]?.split(separator: "|").map(String.init), a.count == 3 {
+        if let a = ProcessInfo.processInfo.environment["BUTTERFLY_SYSTEM"]?.split(separator: "|").map(String.init), a.count == 3 {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.model.ambient(.system(symbol: a[0], title: a[1], detail: a[2]), for: 8) }
         }
-        if let a = ProcessInfo.processInfo.environment["CTRL_ANSWER"]?.split(separator: "|").map(String.init), a.count == 2 {
+        if let a = ProcessInfo.processInfo.environment["BUTTERFLY_ANSWER"]?.split(separator: "|").map(String.init), a.count == 2 {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.model.ambient(.answer(title: a[0], text: a[1].replacingOccurrences(of: "\\n", with: "\n")), for: 6) }
         }
-        if let s = ProcessInfo.processInfo.environment["CTRL_TIMER"].flatMap(Double.init) {
+        if let s = ProcessInfo.processInfo.environment["BUTTERFLY_TIMER"].flatMap(Double.init) {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { _ = Timers.shared.start(s) }
         }
-        if let lines = ProcessInfo.processInfo.environment["CTRL_SPEAK"] {
+        if let lines = ProcessInfo.processInfo.environment["BUTTERFLY_SPEAK"] {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { self.model.speakTest(lines.components(separatedBy: "|")) }
         }
-        if ProcessInfo.processInfo.environment["CTRL_PTT"] == "1" {
+        if ProcessInfo.processInfo.environment["BUTTERFLY_PTT"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { self.model.pttTest() }
         }
-        if let say = ProcessInfo.processInfo.environment["CTRL_SAY"] {
+        if let say = ProcessInfo.processInfo.environment["BUTTERFLY_SAY"] {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.model.say(say.components(separatedBy: "|")) }
         }
-        if let app = ProcessInfo.processInfo.environment["CTRL_MEETING_PROMPT"] {
+        if let app = ProcessInfo.processInfo.environment["BUTTERFLY_MEETING_PROMPT"] {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { Meetings.shared.simulateAsk(app) }
         }
-        if let lines = ProcessInfo.processInfo.environment["CTRL_CLEAN"] {   // show how spoken text is tidied before typing
+        if let lines = ProcessInfo.processInfo.environment["BUTTERFLY_CLEAN"] {   // show how spoken text is tidied before typing
             for l in lines.components(separatedBy: "|") { print("“\(l)” → “\(Typer.clean(l))”") }; exit(0)
         }
-        if let lines = ProcessInfo.processInfo.environment["CTRL_SEARCH"] {   // how search phrases parse: site + query + URL
+        if let lines = ProcessInfo.processInfo.environment["BUTTERFLY_SEARCH"] {   // how search phrases parse: site + query + URL
             for l in lines.components(separatedBy: "|") { print("“\(l)” →", WebSearch.parse(l).map { "\($0.engine): “\($0.query)” \($0.url)" } ?? "nil") }; exit(0)
         }
-        if let lines = ProcessInfo.processInfo.environment["CTRL_SPLIT"] {   // print how sentences split into steps, then quit
+        if let lines = ProcessInfo.processInfo.environment["BUTTERFLY_SPLIT"] {   // print how sentences split into steps, then quit
             Task { for l in lines.components(separatedBy: "|") { print("“\(l)” →", await StepSplitter.split(l)) }; exit(0) }
         }
-        if let f = ProcessInfo.processInfo.environment["CTRL_TRANSCRIBE"] {   // re-run Gemini on this meeting folder
+        if let f = ProcessInfo.processInfo.environment["BUTTERFLY_TRANSCRIBE"] {   // re-run Gemini on this meeting folder
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { Meetings.shared.retranscribeLast(folder: URL(fileURLWithPath: f)) }
         }
-        if let m = ProcessInfo.processInfo.environment["CTRL_RECORDING_AT"].flatMap(Double.init) {   // minutes in: the recording pill alone
+        if let m = ProcessInfo.processInfo.environment["BUTTERFLY_RECORDING_AT"].flatMap(Double.init) {   // minutes in: the recording pill alone
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.model.recording = NotchModel.Recording(app: "Demo", since: Date().addingTimeInterval(-m * 60)) }
         }
-        if ProcessInfo.processInfo.environment["CTRL_RECORDING_STATES"] == "1" {
+        if ProcessInfo.processInfo.environment["BUTTERFLY_RECORDING_STATES"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.model.recordingStatesDemo() }
         }
-        // CTRL_TRANSCRIPT_READY=1: the "Transcript ready" card for the newest meeting.
-        if ProcessInfo.processInfo.environment["CTRL_TRANSCRIPT_READY"] == "1",
+        // BUTTERFLY_TRANSCRIPT_READY=1: the "Transcript ready" card for the newest meeting.
+        if ProcessInfo.processInfo.environment["BUTTERFLY_TRANSCRIPT_READY"] == "1",
            let last = (try? FileManager.default.contentsOfDirectory(at: Meetings.root, includingPropertiesForKeys: nil))?.max(by: { $0.lastPathComponent < $1.lastPathComponent }) {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                 self.model.notify(.transcriptReady(title: String(last.lastPathComponent.dropFirst(17)), file: last.appendingPathComponent("transcript.md")), for: 12)
             }
         }
-        if ProcessInfo.processInfo.environment["CTRL_GALLERY"] == "1" {
+        if ProcessInfo.processInfo.environment["BUTTERFLY_GALLERY"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.model.runGallery() }
             return
         }
-        if ProcessInfo.processInfo.environment["CTRL_DEMO"] == "1" {
+        if ProcessInfo.processInfo.environment["BUTTERFLY_DEMO"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.model.runDemo() }
             return
         }
-        if let path = ProcessInfo.processInfo.environment["CTRL_LOCKTEST"] {
+        if let path = ProcessInfo.processInfo.environment["BUTTERFLY_LOCKTEST"] {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.model.lockTest(path) }
             return
         }
-        if let s = ProcessInfo.processInfo.environment["CTRL_MARKTEST"] {
+        if let s = ProcessInfo.processInfo.environment["BUTTERFLY_MARKTEST"] {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.model.markTest(s) }
             return
         }

@@ -5,7 +5,7 @@ import ScreenCaptureKit
 /// Remembers what was on screen. Every few seconds the front window is captured; when it changed, its text is read
 /// (on-device OCR) and kept with the time, app and window title. Later, "what was the camera price I saw on Stride?"
 /// is answered from this. Text only, nothing leaves the Mac until you ask a question about it.
-/// Files: ~/Library/Application Support/CTRL/screen/YYYY-MM-DD.jsonl, kept 30 days.
+/// Files: ~/Library/Application Support/Butterfly/screen/YYYY-MM-DD.jsonl, kept 30 days.
 @MainActor
 final class ScreenMemory {
     static let shared = ScreenMemory()
@@ -22,7 +22,7 @@ final class ScreenMemory {
     /// Frames are kept a week (text stays 30 days).
     static let imageDays = 7
 
-    nonisolated static let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("CTRL/screen")
+    nonisolated static let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Butterfly/screen")
     static let key = "screenMemory"
     var enabled: Bool {
         get { UserDefaults.standard.object(forKey: Self.key) == nil ? true : UserDefaults.standard.bool(forKey: Self.key) }

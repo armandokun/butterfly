@@ -4,7 +4,7 @@
 # Builds → Developer ID + hardened runtime → notarized + stapled (if set up) → Butterfly.zip
 # → GitHub release on armandokun/butterfly with Butterfly.zip + appcast.xml.
 # One-time setup (optional; without it, first open needs Open Anyway):
-#   xcrun notarytool store-credentials CTRL --apple-id <you@icloud.com> --team-id NLHT9F6F5X
+#   xcrun notarytool store-credentials Butterfly --apple-id <you@icloud.com> --team-id NLHT9F6F5X
 #   Sparkle signing key lives in the login keychain ("butterfly"); back it up:
 #     .build/artifacts/sparkle/Sparkle/bin/generate_keys --account butterfly -x butterfly-sparkle.key
 set -euo pipefail
@@ -14,7 +14,7 @@ VERSION=${1:?usage: release.sh <version, e.g. 0.2.0>}
 REPO=armandokun/butterfly
 SPARKLE=.build/artifacts/sparkle/Sparkle/bin
 [[ -z "$(git status --porcelain)" ]] || { echo "Commit or stash your changes first."; exit 1; }
-NOTARIZE=0; xcrun notarytool history --keychain-profile CTRL >/dev/null 2>&1 && NOTARIZE=1
+NOTARIZE=0; xcrun notarytool history --keychain-profile Butterfly >/dev/null 2>&1 && NOTARIZE=1
 
 # Version: MARKETING_VERSION = what people see, CURRENT_PROJECT_VERSION = build number Sparkle compares.
 BUILD=$(( $(awk '/CURRENT_PROJECT_VERSION:/{gsub(/"/,"",$2); print $2; exit}' project.yml) + 1 ))
@@ -33,7 +33,7 @@ $SIGN --preserve-metadata=entitlements "$SP/XPCServices/Downloader.xpc"
 $SIGN "$SP/Autoupdate" "$SP/Updater.app"
 $SIGN "$APP/Contents/Frameworks/Sparkle.framework"
 $SIGN "$APP/Contents/Resources/MediaRemoteAdapter/MediaRemoteAdapter.framework"
-$SIGN --entitlements Resources/CTRL.entitlements "$APP"
+$SIGN --entitlements Resources/Butterfly.entitlements "$APP"
 codesign --verify --deep --strict "$APP"
 
 OUT=build/release; rm -rf "$OUT"; mkdir -p "$OUT"
@@ -41,7 +41,7 @@ ZIP="$OUT/Butterfly.zip"
 ditto -c -k --keepParent "$APP" "$ZIP"
 # Notarized: opens with no warning. Not: first open needs System Settings → Privacy & Security → Open Anyway.
 if (( NOTARIZE )); then
-  xcrun notarytool submit "$ZIP" --keychain-profile CTRL --wait
+  xcrun notarytool submit "$ZIP" --keychain-profile Butterfly --wait
   xcrun stapler staple "$APP"
   rm "$ZIP"; ditto -c -k --keepParent "$APP" "$ZIP"
 else

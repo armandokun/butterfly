@@ -1,9 +1,9 @@
 import AppKit
 
-/// Routines: one phrase → several normal CTRL commands, run in order.
-/// Created in the app (menu bar → Routines…). Saved to ~/Library/Application Support/CTRL/routines.json.
+/// Routines: one phrase → several normal Butterfly commands, run in order.
+/// Created in the app (menu bar → Routines…). Saved to ~/Library/Application Support/Butterfly/routines.json.
 ///
-/// Each step is a sentence CTRL already understands, so routines reuse every skill
+/// Each step is a sentence Butterfly already understands, so routines reuse every skill
 /// (apps, sites, layout, music, settings, menus) with no extra code per step.
 struct Routine: Codable, Identifiable, Equatable {
     struct Step: Codable, Identifiable, Equatable {

@@ -117,7 +117,7 @@ struct TypeSafeClient {
         let assets = images.isEmpty ? nil : Dictionary(uniqueKeysWithValues: images.map { ($0.ref, Asset(data_base64: $0.jpeg.base64EncodedString())) })
         req.httpBody = try JSONEncoder().encode(Request(model: Self.model, state: state, questions: questions, assets: assets))
 
-        if let path = ProcessInfo.processInfo.environment["CTRL_DUMP_REQ"] { try? req.httpBody?.write(to: URL(fileURLWithPath: path)) }
+        if let path = ProcessInfo.processInfo.environment["BUTTERFLY_DUMP_REQ"] { try? req.httpBody?.write(to: URL(fileURLWithPath: path)) }
         let (data, resp) = try await session.data(for: req)
         let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard status == 200 else {

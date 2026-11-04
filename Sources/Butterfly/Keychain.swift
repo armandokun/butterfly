@@ -4,7 +4,7 @@ import Security
 
 /// API keys in the login Keychain: TypeSafe (commands) and Gemini (meeting transcripts).
 enum Keychain {
-    private static let service = "com.armandas.ctrl"
+    static let service = "com.armandas.butterfly"
 
     static var apiKey: String? { read("typesafe-api-key", env: "TYPESAFE_API_KEY") }
     static func save(_ key: String) { write(key, "typesafe-api-key") }
@@ -15,7 +15,7 @@ enum Keychain {
     /// Key that encrypts screen-memory frames on disk (32 random bytes, made once). Lives only in this user's Keychain,
     /// so a copied ~/Library folder is unreadable without their login.
     static var screenKey: SymmetricKey {
-        if let b64 = read("screen-memory-key", env: "CTRL_SCREEN_KEY"), let d = Data(base64Encoded: b64), d.count == 32 { return SymmetricKey(data: d) }
+        if let b64 = read("screen-memory-key", env: "BUTTERFLY_SCREEN_KEY"), let d = Data(base64Encoded: b64), d.count == 32 { return SymmetricKey(data: d) }
         let k = SymmetricKey(size: .bits256)
         write(k.withUnsafeBytes { Data($0) }.base64EncodedString(), "screen-memory-key")
         return k

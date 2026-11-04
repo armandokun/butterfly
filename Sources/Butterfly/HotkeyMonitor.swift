@@ -92,7 +92,7 @@ final class HotkeyMonitor {
     }
 
     private func otherKeyPressed() {
-        if locked { return }   // typing (yours or CTRL's) doesn't stop locked mode
+        if locked { return }   // typing (yours or Butterfly's) doesn't stop locked mode
         if let pending { pending.cancel(); self.pending = nil; onDisarm?() }
         if active { active = false; onCancel?() }
     }

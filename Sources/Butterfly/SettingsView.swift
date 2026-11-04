@@ -2,7 +2,7 @@ import AppKit
 import ServiceManagement
 import SwiftUI
 
-/// CTRL → Settings… (⌘,). One fixed-size window with a flat Pond tab strip (General · Vocabulary · Routines);
+/// Butterfly → Settings… (⌘,). One fixed-size window with a flat Pond tab strip (General · Vocabulary · Routines);
 /// the title follows the pane and the last pane is restored.
 struct SettingsView: View {
     var run: (Routine) -> Void
@@ -407,7 +407,7 @@ private struct ScreenMemoryPane: View {
     private func refresh() { enabled = ScreenMemory.shared.enabled; count = ScreenMemory.shared.count; bytes = ScreenMemory.diskUsage }
 }
 
-/// Open at login (SMAppService). On by default the first time CTRL runs from /Applications.
+/// Open at login (SMAppService). On by default the first time Butterfly runs from /Applications.
 @MainActor
 enum LoginItem {
     static var enabled: Bool { SMAppService.mainApp.status == .enabled }

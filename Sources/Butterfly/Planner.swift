@@ -175,7 +175,7 @@ enum Planner {
         try Task.checkCancellation()
         let parts = (((d["candidates"] as? [[String: Any]])?.first?["content"] as? [String: Any])?["parts"] as? [[String: Any]]) ?? []
         let text = parts.filter { $0["thought"] as? Bool != true }.compactMap { $0["text"] as? String }.joined()
-        if ProcessInfo.processInfo.environment["CTRL_DEBUG"] == "1" { print("  planner raw:", text); try? prompt.write(toFile: "/tmp/ctrl-plan-prompt.txt", atomically: true, encoding: .utf8) }
+        if ProcessInfo.processInfo.environment["BUTTERFLY_DEBUG"] == "1" { print("  planner raw:", text); try? prompt.write(toFile: "/tmp/butterfly-plan-prompt.txt", atomically: true, encoding: .utf8) }
         let obj = Self.json(text)
         guard !obj.isEmpty else { throw Failure(message: "The planner didn't answer") }
         var plan = try parse(obj)

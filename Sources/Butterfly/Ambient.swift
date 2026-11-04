@@ -7,11 +7,11 @@ import IOBluetooth
 // MARK: - Focus
 
 /// Reading: ~/Library/DoNotDisturb/DB (needs Full Disk Access; without it we just don't announce changes).
-/// Switching: the "CTRL Focus" shortcut (macOS has no public API). CTRL builds and signs it; you click Add once.
+/// Switching: the "Butterfly Focus" shortcut (macOS has no public API). Butterfly builds and signs it; you click Add once.
 @MainActor
 enum Focus {
     struct Mode { let name: String; let id: String }
-    nonisolated static let shortcutName = "CTRL Focus"
+    nonisolated static let shortcutName = "Butterfly Focus"
 
     private static let db = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/DoNotDisturb/DB")
 
@@ -86,7 +86,7 @@ enum Focus {
             "WFWorkflowIcon": ["WFWorkflowIconGlyphNumber": 59511, "WFWorkflowIconStartColor": 1440408063],
         ]
         let dir = FileManager.default.temporaryDirectory
-        let raw = dir.appendingPathComponent("ctrl-focus-unsigned.shortcut")
+        let raw = dir.appendingPathComponent("butterfly-focus-unsigned.shortcut")
         let signed = dir.appendingPathComponent("\(shortcutName).shortcut")
         guard let data = try? PropertyListSerialization.data(fromPropertyList: wf, format: .binary, options: 0),
               (try? data.write(to: raw)) != nil else { return }

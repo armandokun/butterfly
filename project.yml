@@ -1,4 +1,4 @@
-name: CTRL
+name: Butterfly
 options:
   bundleIdPrefix: com.armandas
   deploymentTarget:
@@ -15,13 +15,13 @@ settings:
     CURRENT_PROJECT_VERSION: "1"
     DEVELOPMENT_TEAM: NLHT9F6F5X
 targets:
-  CTRL:
+  Butterfly:
     type: application
     platform: macOS
     dependencies:
       - package: Sparkle
     sources:
-      - path: Sources/CTRL
+      - path: Sources/Butterfly
       - path: Resources/MediaRemoteAdapter
         type: folder
         buildPhase: resources
@@ -50,7 +50,7 @@ targets:
         NSCalendarsFullAccessUsageDescription: Butterfly adds events and reads your agenda when you ask by voice.
         NSRemindersFullAccessUsageDescription: Butterfly creates reminders when you ask by voice.
     entitlements:
-      path: Resources/CTRL.entitlements
+      path: Resources/Butterfly.entitlements
       properties:
         com.apple.security.automation.apple-events: true
         com.apple.security.device.audio-input: true
@@ -59,7 +59,7 @@ targets:
         com.apple.security.personal-information.location: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.armandas.ctrl
+        PRODUCT_BUNDLE_IDENTIFIER: com.armandas.butterfly
         PRODUCT_NAME: Butterfly
         INFOPLIST_FILE: Resources/Info.plist
         GENERATE_INFOPLIST_FILE: NO

@@ -199,7 +199,7 @@ enum SystemController {
     }
 }
 
-/// Synthesized key presses (needs Accessibility, which CTRL already has).
+/// Synthesized key presses (needs Accessibility, which Butterfly already has).
 enum Keys {
     static func press(_ key: CGKeyCode, flags: CGEventFlags) {
         let src = CGEventSource(stateID: .hidSystemState)

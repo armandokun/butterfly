@@ -28,7 +28,7 @@ enum ScreenReader {
 
     /// Selected text if there is some, else everything readable in the front window.
     static func text(of app: NSRunningApplication?) async -> (text: String, selected: Bool)? {
-        if let s = selectedText(), s.count > 2, ProcessInfo.processInfo.environment["CTRL_WINDOW_PNG"] == nil { return (s, true) }
+        if let s = selectedText(), s.count > 2, ProcessInfo.processInfo.environment["BUTTERFLY_WINDOW_PNG"] == nil { return (s, true) }
         guard let app, let t = try? await ocr(app), !t.isEmpty else { return nil }
         return (t, false)
     }
@@ -44,7 +44,7 @@ enum ScreenReader {
 
     /// The app's front window as an image (2× for sharp OCR).
     static func windowImage(_ app: NSRunningApplication) async throws -> CGImage? {
-        if let path = ProcessInfo.processInfo.environment["CTRL_WINDOW_PNG"] {   // CLI tests
+        if let path = ProcessInfo.processInfo.environment["BUTTERFLY_WINDOW_PNG"] {   // CLI tests
             return NSImage(contentsOfFile: path)?.cgImage(forProposedRect: nil, context: nil, hints: nil)
         }
         let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)

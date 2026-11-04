@@ -53,7 +53,7 @@ final class NowPlaying: ObservableObject {
     func start() {
         guard process == nil, let a = Self.adapter else { return }
         if !Self.cleaned {
-            // A crashed/killed CTRL leaves its helper behind: clear those once.
+            // A crashed/killed Butterfly leaves its helper behind: clear those once.
             Self.cleaned = true
             let k = Process(); k.executableURL = URL(fileURLWithPath: "/usr/bin/pkill"); k.arguments = ["-f", "mediaremote-adapter.pl"]
             try? k.run(); k.waitUntilExit()

@@ -195,7 +195,7 @@ final class Meetings {
         emit(.ask(app: name))
     }
 
-    /// Debug (CTRL_MEETING_PROMPT=Dia): show the prompt as if a call started.
+    /// Debug (BUTTERFLY_MEETING_PROMPT=Dia): show the prompt as if a call started.
     func simulateAsk(_ app: String) { simulated = true; pending = ("\(app) call", true); emit(.ask(app: "\(app) call")) }
     private var simulated = false
 

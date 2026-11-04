@@ -17,11 +17,11 @@ swift build -c "$CONFIG"
 APP=build/Butterfly.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
-cp ".build/$CONFIG/CTRL" "$APP/Contents/MacOS/Butterfly"
+cp ".build/$CONFIG/Butterfly" "$APP/Contents/MacOS/Butterfly"
 # Info.plist is shared with the Xcode project: fill in Xcode's $(VARIABLES) for CLI builds (versions from project.yml).
 MV=$(awk '/MARKETING_VERSION:/{gsub(/"/,"",$2); print $2; exit}' project.yml)
 PV=$(awk '/CURRENT_PROJECT_VERSION:/{gsub(/"/,"",$2); print $2; exit}' project.yml)
-sed -e 's/$(EXECUTABLE_NAME)/Butterfly/g' -e 's/$(PRODUCT_BUNDLE_IDENTIFIER)/com.armandas.ctrl/g' \
+sed -e 's/$(EXECUTABLE_NAME)/Butterfly/g' -e 's/$(PRODUCT_BUNDLE_IDENTIFIER)/com.armandas.butterfly/g' \
     -e 's/$(PRODUCT_NAME)/Butterfly/g' -e 's/$(DEVELOPMENT_LANGUAGE)/en/g' -e 's/$(PRODUCT_BUNDLE_PACKAGE_TYPE)/APPL/g' \
     -e "s/\$(MARKETING_VERSION)/$MV/g" -e "s/\$(CURRENT_PROJECT_VERSION)/$PV/g" -e 's/$(MACOSX_DEPLOYMENT_TARGET)/26.0/g' \
     Resources/Info.plist > "$APP/Contents/Info.plist"
@@ -39,14 +39,14 @@ if xcrun --find actool >/dev/null 2>&1 && [[ -d /Applications/Xcode.app ]]; then
     --minimum-deployment-target 26.0 --app-icon AppIcon \
     --output-partial-info-plist "$(mktemp -d)/icon.plist" >/dev/null
 else
-  ICONSET=$(mktemp -d)/CTRL.iconset; mkdir -p "$ICONSET"
+  ICONSET=$(mktemp -d)/Butterfly.iconset; mkdir -p "$ICONSET"
   cp Resources/Assets.xcassets/AppIcon.appiconset/icon_*.png "$ICONSET/"
   iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
 fi
 /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string AppIcon" "$APP/Contents/Info.plist" 2>/dev/null || true
 /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string AppIcon" "$APP/Contents/Info.plist" 2>/dev/null || true
 
-IDENTITY=${CTRL_SIGN_IDENTITY:-$(security find-identity -v -p codesigning | awk -F'"' '/Developer ID Application/{print $2; exit}')}
+IDENTITY=${BUTTERFLY_SIGN_IDENTITY:-$(security find-identity -v -p codesigning | awk -F'"' '/Developer ID Application/{print $2; exit}')}
 codesign --force --sign "${IDENTITY:--}" "$APP/Contents/Resources/MediaRemoteAdapter/MediaRemoteAdapter.framework"
 codesign --force --deep --sign "${IDENTITY:--}" "$APP/Contents/Frameworks/Sparkle.framework"
 codesign --force --sign "${IDENTITY:--}" "$APP"

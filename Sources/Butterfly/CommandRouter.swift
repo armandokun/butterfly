@@ -26,7 +26,7 @@ struct CommandRouter {
         case navigate(KeyCommands.Nav)
         case edit(KeyCommands.Edit)
         case screen(ScreenReader.Action, request: String)
-        case undo                                // CTRL's own last action, else ⌘Z
+        case undo                                // Butterfly's own last action, else ⌘Z
         case quickSetting(String, on: Bool)
         case audioOutput(AudioOutput.Device)
         case audioOutputBluetooth(name: String, address: String)   // paired but not connected yet
@@ -309,12 +309,12 @@ struct CommandRouter {
         if !known.isEmpty { state["users_known_sites"] = known.joined(separator: ", ") }
 
         let asked = Date()
-        if ProcessInfo.processInfo.environment["CTRL_TIMING"] == "1" { print(String(format: "  build questions %.0f ms", asked.timeIntervalSince(routeStart) * 1000)) }
+        if ProcessInfo.processInfo.environment["BUTTERFLY_TIMING"] == "1" { print(String(format: "  build questions %.0f ms", asked.timeIntervalSince(routeStart) * 1000)) }
         let response = try await client.systemOne(state: state, questions: questions)
         Self.trace(response, questions: questions.count, checks: checks, state: state, ms: Int(Date().timeIntervalSince(asked) * 1000))
-        if ProcessInfo.processInfo.environment["CTRL_TIMING"] == "1" { print(String(format: "  model call %.0f ms", Date().timeIntervalSince(asked) * 1000)) }
+        if ProcessInfo.processInfo.environment["BUTTERFLY_TIMING"] == "1" { print(String(format: "  model call %.0f ms", Date().timeIntervalSince(asked) * 1000)) }
 
-        if ProcessInfo.processInfo.environment["CTRL_DEBUG"] == "1" {
+        if ProcessInfo.processInfo.environment["BUTTERFLY_DEBUG"] == "1" {
             for k in ["intent", "routine", "target1", "windows", "layout", "settings_page", "settings_action", "menu_item", "system_action", "timer_action", "timer_duration", "focus_mode", "connect_target", "window_action", "click_target", "calendar_action", "quick_setting", "audio_target", "clip_item", "nav_action", "edit_action", "screen_action", "files_action", "folder", "level"] {
                 if let a = response.choice(k) { print("  \(k): \(a.choice) (\(String(format: "%.2f", a.confidence)))") }
             }
@@ -553,7 +553,7 @@ struct CommandRouter {
         let r = try await client.systemOne(
             state: ["spoken_command": transcript],
             questions: ["file": .choice("Which file does the user want? If several match equally (e.g. many invoices), pick the most recently modified one.", options: opts)])
-        if ProcessInfo.processInfo.environment["CTRL_DEBUG"] == "1", let a = r.choice("file") {
+        if ProcessInfo.processInfo.environment["BUTTERFLY_DEBUG"] == "1", let a = r.choice("file") {
             print("  file: \(a.choice) (\(String(format: "%.2f", a.confidence))) of \(hits.count) hits")
         }
         guard let a = r.choice("file"), a.choice != "none",
@@ -595,7 +595,7 @@ struct CommandRouter {
         }
         let response = try await client.systemOne(state: state, questions: questions, images: images)
         let best = shots.indices.max { (response.noul("visible_\($0)") ?? 0) < (response.noul("visible_\($1)") ?? 0) }!
-        if ProcessInfo.processInfo.environment["CTRL_DEBUG"] == "1" {
+        if ProcessInfo.processInfo.environment["BUTTERFLY_DEBUG"] == "1" {
             for i in shots.indices {
                 print("  display \(shots[i].display): visible=\(String(format: "%.2f", response.noul("visible_\(i)") ?? -1)) box=\(response.box("target_\(i)").map { "\($0.box) conf=\(String(format: "%.2f", $0.confidence))" } ?? "-")")
             }

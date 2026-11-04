@@ -1,18 +1,18 @@
 import AppKit
 
-/// Your custom words: one per line in ~/Library/Application Support/CTRL/vocabulary.txt
+/// Your custom words: one per line in ~/Library/Application Support/Butterfly/vocabulary.txt
 /// Used as speech-recognition hints AND to repair split words ("open mail dot sh" → "openmail.sh").
 @MainActor
 enum Vocabulary {
     static let fileURL: URL = {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("CTRL", isDirectory: true)
+            .appendingPathComponent("Butterfly", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("vocabulary.txt")
     }()
 
     private static let starter = """
-    # CTRL vocabulary: one word, name, or web address per line.
+    # Butterfly vocabulary: one word, name, or web address per line.
     # Helps speech recognition and fixes words it splits apart.
     openmail.sh
     """

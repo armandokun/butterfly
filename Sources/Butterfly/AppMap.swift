@@ -5,7 +5,7 @@ import ApplicationServices
 /// Settings window (walked tab by tab, nothing toggled), its AppleScript commands and URL schemes.
 /// The planner gets only the entries that match the request, so "hide the Slack icon from the menu bar" comes with
 /// `Settings > Advanced > Show Slack in menu bar (checkbox, on)` instead of a guess.
-/// Saved to ~/Library/Application Support/CTRL/apps/<bundle id>.json.
+/// Saved to ~/Library/Application Support/Butterfly/apps/<bundle id>.json.
 @MainActor
 final class AppMap {
     static let shared = AppMap()
@@ -172,7 +172,7 @@ final class AppMap {
         var before = windows(ax)
         if before.isEmpty, let f = focusedBefore { before = [f] }   // some apps answer AXWindows late/empty
         let beforeIDs = Set(before.map { CFHash($0) })
-        let dbg = ProcessInfo.processInfo.environment["CTRL_DEBUG"] == "1"
+        let dbg = ProcessInfo.processInfo.environment["BUTTERFLY_DEBUG"] == "1"
         if dbg { print("  crawl: \(before.count) windows before, focused \(focusedBefore != nil)") }
         guard !before.isEmpty else { return ([], false) }   // no window to open settings from (closed to the menu bar)
 

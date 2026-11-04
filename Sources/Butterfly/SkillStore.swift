@@ -3,7 +3,7 @@ import SwiftUI
 
 /// What Butterfly learned by doing: the first time a request needs the planner, the finished plan is saved as a
 /// skill with slots ("search {query} on linkedin"). Next time the same kind of request fires that skill directly —
-/// no planning, no network. Saved to ~/Library/Application Support/CTRL/skills.json.
+/// no planning, no network. Saved to ~/Library/Application Support/Butterfly/skills.json.
 @MainActor
 final class SkillStore: ObservableObject {
     static let shared = SkillStore()

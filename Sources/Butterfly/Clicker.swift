@@ -134,7 +134,7 @@ enum Clicker {
             let filter = SCContentFilter(display: display, excludingApplications: me, exceptingWindows: [])
             let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
             guard let jpeg = NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.8]) else { continue }
-            if ProcessInfo.processInfo.environment["CTRL_DEBUG"] == "1" { try? jpeg.write(to: URL(fileURLWithPath: "/tmp/ctrl-shot-\(shots.count).jpg")) }
+            if ProcessInfo.processInfo.environment["BUTTERFLY_DEBUG"] == "1" { try? jpeg.write(to: URL(fileURLWithPath: "/tmp/butterfly-shot-\(shots.count).jpg")) }
             shots.append(Shot(jpeg: jpeg, frame: bounds, display: display.displayID))
         }
         return shots

@@ -17,10 +17,10 @@ Needs Xcode 26 (or its Command Line Tools).
 
 ```bash
 ./scripts/install.sh      # build, install to /Applications, launch
-swift build               # just compile (debug flags: see Sources/CTRL/CLI.swift)
+swift build               # just compile (debug flags: see Sources/Butterfly/CLI.swift)
 ```
 
-The code lives in `Sources/CTRL` (the project's old name). Without a Developer ID certificate, builds are signed ad-hoc, so macOS asks for permissions again after each rebuild.
+The code lives in `Sources/Butterfly`. Without a Developer ID certificate, builds are signed ad-hoc, so macOS asks for permissions again after each rebuild.
 
 Crash reports and logs: `~/Library/Logs/Butterfly`.
 

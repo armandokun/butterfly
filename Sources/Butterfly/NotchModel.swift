@@ -159,7 +159,7 @@ final class NotchModel: ObservableObject {
         else if !over, phase == .recordingCard { close() }
     }
 
-    /// Debug (CTRL_RECORDING_STATES=1): every meeting-notes state, 3 s each, for screenshots.
+    /// Debug (BUTTERFLY_RECORDING_STATES=1): every meeting-notes state, 3 s each, for screenshots.
     func recordingStatesDemo() {
         let steps: [() -> Void] = [
             { self.phase = .meetingPrompt(app: "Dia call") },
@@ -233,7 +233,7 @@ final class NotchModel: ObservableObject {
         return Double(dp[b.count]) / Double(a.count)
     }
 
-    /// Short-term memory entry: what you said, what CTRL did, where.
+    /// Short-term memory entry: what you said, what Butterfly did, where.
     private func remember(_ said: String, _ outcome: CommandRouter.Outcome) {
         var did: String
         switch phase {
@@ -295,7 +295,7 @@ final class NotchModel: ObservableObject {
         try? await recorder.prepare()
     }
 
-    /// `CTRL_MARKTEST="what is this"`: action mode with a synthetic circle drawn mid-screen, then that sentence.
+    /// `BUTTERFLY_MARKTEST="what is this"`: action mode with a synthetic circle drawn mid-screen, then that sentence.
     func markTest(_ sentence: String) {
         isLocked = true
         accepting = true
@@ -316,12 +316,12 @@ final class NotchModel: ObservableObject {
         }
     }
 
-    /// `CTRL_DEMO=1`: cycles through every state for visual checks.
-    /// `CTRL_LOCKTEST=file.aiff`: locked mode fed from an audio file instead of the mic.
+    /// `BUTTERFLY_DEMO=1`: cycles through every state for visual checks.
+    /// `BUTTERFLY_LOCKTEST=file.aiff`: locked mode fed from an audio file instead of the mic.
     func lockTest(_ path: String) {
         isLocked = true
         accepting = true
-        dictationOnly = ProcessInfo.processInfo.environment["CTRL_LOCKDICT"] == "1"
+        dictationOnly = ProcessInfo.processInfo.environment["BUTTERFLY_LOCKDICT"] == "1"
         frontApp = NSWorkspace.shared.frontmostApplication
         phase = .listening
         Task {
@@ -333,7 +333,7 @@ final class NotchModel: ObservableObject {
             _ = try? await results.value
         }
     }
-    /// CTRL_GALLERY=1: steps through every notch design, writing each name to /tmp/butterfly-gallery/state for capture.
+    /// BUTTERFLY_GALLERY=1: steps through every notch design, writing each name to /tmp/butterfly-gallery/state for capture.
     func runGallery() {
         moveToActiveScreen()
         let safari = AppCatalog.shared.app(named: "Safari"), slack = AppCatalog.shared.app(named: "Slack"), music = AppCatalog.shared.app(named: "Music")
@@ -372,7 +372,7 @@ final class NotchModel: ObservableObject {
                 ("19b-now-playing", { self.phase = .nowPlaying }),
             ]
             if let safari, let slack { steps.insert(("07-opened", { self.phase = .opened([.app(safari), .app(slack)], detail: "side by side") }), at: 6) }
-            if let only = ProcessInfo.processInfo.environment["CTRL_GALLERY_ONLY"] { steps = steps.filter { $0.0.contains(only) } }
+            if let only = ProcessInfo.processInfo.environment["BUTTERFLY_GALLERY_ONLY"] { steps = steps.filter { $0.0.contains(only) } }
             for (name, apply) in steps {
                 withAnimation(.smooth) { apply() }
                 try? await Task.sleep(for: .milliseconds(name == "_play" ? 2500 : 1100))
@@ -456,7 +456,7 @@ final class NotchModel: ObservableObject {
     private var firstLevel = true
     private var lastFinalizeMs: Int?
     static var t0 = Date()
-    static func lap(_ s: String) { if ProcessInfo.processInfo.environment["CTRL_TIMING"] == "1" { print(String(format: "%5.0f ms  %@", Date().timeIntervalSince(t0) * 1000, s)); fflush(stdout) } }
+    static func lap(_ s: String) { if ProcessInfo.processInfo.environment["BUTTERFLY_TIMING"] == "1" { print(String(format: "%5.0f ms  %@", Date().timeIntervalSince(t0) * 1000, s)); fflush(stdout) } }
 
     // MARK: Multiple displays
 
@@ -693,7 +693,7 @@ final class NotchModel: ObservableObject {
                let a = r.choice("intent"), a.confidence > 0.35 { intent = a.choice }
         }
         DecisionTrace.shared.add(.rule, "marks + “\(text)” → \(intent)", app?.localizedName)
-        if ProcessInfo.processInfo.environment["CTRL_DEBUG"] == "1" { print("marks + “\(text)” → \(intent) (front: \(app?.localizedName ?? "?"))") }
+        if ProcessInfo.processInfo.environment["BUTTERFLY_DEBUG"] == "1" { print("marks + “\(text)” → \(intent) (front: \(app?.localizedName ?? "?"))") }
         if intent == "command" || (intent == "cursor" && cursor == nil) { return false }
         guard let marks = await MarkOverlay.shared.hide() else { return false }
         if intent == "cursor", let cursor { await sendToCursor(marks, text: text, cursor: cursor, from: app) }
@@ -728,11 +728,11 @@ final class NotchModel: ObservableObject {
             let answer = try await ScreenReader.explain(marks.images, request: request, app: app?.localizedName)
             let seconds = min(20, max(6, Double(answer.split(separator: " ").count) / 3))
             show(.answer(title: request == "What is this?" ? "This is" : "Answer", text: answer), for: seconds)
-            if ProcessInfo.processInfo.environment["CTRL_DEBUG"] == "1" { print("answer:", answer) }
+            if ProcessInfo.processInfo.environment["BUTTERFLY_DEBUG"] == "1" { print("answer:", answer) }
             Memory.record(said: request, did: "explained a marked part of the screen", app: app?.localizedName)
         } catch {
             if Task.isCancelled { return }
-            if ProcessInfo.processInfo.environment["CTRL_DEBUG"] == "1" { print("explain error:", error) }
+            if ProcessInfo.processInfo.environment["BUTTERFLY_DEBUG"] == "1" { print("explain error:", error) }
             show(.message(error.localizedDescription), for: 3)
         }
     }
@@ -742,14 +742,14 @@ final class NotchModel: ObservableObject {
     /// Short label for the debug tree: the enum case and its main values.
     private static func describe(_ v: Any) -> String {
         var s = String(describing: v)
-        for noise in ["CTRL.", "Butterfly.", "Optional(", "InstalledApp(name: "] { s = s.replacingOccurrences(of: noise, with: "") }
+        for noise in ["Butterfly.", "Optional(", "InstalledApp(name: "] { s = s.replacingOccurrences(of: noise, with: "") }
         s = s.replacingOccurrences(of: #", url: file://[^)]*\)"#, with: "", options: .regularExpression)
         s = s.replacingOccurrences(of: #"<[^>]*>"#, with: "…", options: .regularExpression)
         return s.count > 180 ? String(s.prefix(180)) + "…" : s
     }
 
-    /// CTRL_SAY="a|b|c": runs each as if spoken (debug, for the decision tree).
-    /// CTRL_PTT=1: simulate holding ⌥ for 2 s, five times (timing test).
+    /// BUTTERFLY_SAY="a|b|c": runs each as if spoken (debug, for the decision tree).
+    /// BUTTERFLY_PTT=1: simulate holding ⌥ for 2 s, five times (timing test).
     /// ⌥ went down: start the mic during the hold delay; cancelled if it was a shortcut.
     func arm() {
         cancelRequestIfRunning()   // ⌥ again while a request runs: that one's dropped, the new one wins (tap = just cancel)
@@ -779,7 +779,7 @@ final class NotchModel: ObservableObject {
         Task { for _ in 0..<5 { arm(); try? await Task.sleep(for: .milliseconds(100)); begin(); Self.lap("notch shown (key down + hold delay)"); try? await Task.sleep(for: .seconds(1.5)); let r0 = Date(); _ = await recorder.stop(); print(String(format: "stop (finalize) %.0f ms", Date().timeIntervalSince(r0) * 1000)); fflush(stdout); phase = .idle; try? await Task.sleep(for: .seconds(1)) } ; exit(0) }
     }
 
-    /// CTRL_SPEAK="a|b": holds ⌥ while macOS `say` speaks each line into the mic, then releases (end-to-end timing).
+    /// BUTTERFLY_SPEAK="a|b": holds ⌥ while macOS `say` speaks each line into the mic, then releases (end-to-end timing).
     func speakTest(_ lines: [String]) {
         Task {
             for l in lines {

@@ -6,7 +6,7 @@ import SwiftUI
 /// own startup. `run` returns true when a flag was handled: the caller keeps the run loop alive and the flag exits the process.
 enum CLI {
     @MainActor static func run(_ args: [String]) -> Bool {
-        // `open CTRL.app --args --add-event "title" "yyyy-MM-dd HH:mm" minutes "location" "notes" ["calendar"]` (runs with CTRL's Calendar access)
+        // `open Butterfly.app --args --add-event "title" "yyyy-MM-dd HH:mm" minutes "location" "notes" ["calendar"]` (runs with Butterfly's Calendar access)
         if let i = args.firstIndex(of: "--add-event"), args.count >= i + 6 {
             let a = Array(args[(i + 1)...])
             Task {
@@ -15,7 +15,7 @@ enum CLI {
                     let c = try await CalendarWriter.createEvent(title: a[0], start: a[1], durationMinutes: Int(a[2]), location: a[3], notes: a[4], calendar: a.count > 5 ? a[5] : nil, allDay: false, source: "", request: "")
                     out = "added \(c.text)"
                 } catch { out = "error \(error.localizedDescription)" }
-                try? out.write(toFile: "/tmp/ctrl-add-event.txt", atomically: true, encoding: .utf8)
+                try? out.write(toFile: "/tmp/butterfly-add-event.txt", atomically: true, encoding: .utf8)
                 exit(0)
             }
             return true
@@ -24,7 +24,7 @@ enum CLI {
             for t in args[(i + 1)...] { print(t, "→", CalendarWriter.date(t).map { $0.formatted() } ?? "nil", "time:", CalendarWriter.hasTime(t)) }
             exit(0)
         }
-        // `CTRL --mictest`: records 3 s with the same recorder the notch uses, prints mic, level and transcript.
+        // `Butterfly --mictest`: records 3 s with the same recorder the notch uses, prints mic, level and transcript.
         if args.contains("--mictest") {
             Task { @MainActor in
                 let r = SpeechRecorder()
@@ -241,7 +241,7 @@ enum CLI {
         return false
     }
 
-    /// Debug: `CTRL --route "open facebook dot com"` prints what would happen, opens nothing.
+    /// Debug: `Butterfly --route "open facebook dot com"` prints what would happen, opens nothing.
     /// Add `--exec` to actually run it. Starts the work; the caller keeps the run loop alive.
     @MainActor private static func routeFromCLI(_ text: String) {
         let exec = CommandLine.arguments.contains("--exec")
@@ -251,20 +251,20 @@ enum CLI {
         print("sites:", URLExtractor.candidates(in: text))
         guard let key = Keychain.apiKey else { print("no API key"); exit(1) }
         Bluetooth.shared.refreshNow()
-        // CTRL_CLIPS="newest|older|oldest" pretends these were copied.
-        if let c = ProcessInfo.processInfo.environment["CTRL_CLIPS"] { Clipboard.shared.seed(c.components(separatedBy: "|")) }
-        // CTRL_MEMORY="said|did|app;said|did|app" pretends these happened just now.
-        if let mem = ProcessInfo.processInfo.environment["CTRL_MEMORY"] {
+        // BUTTERFLY_CLIPS="newest|older|oldest" pretends these were copied.
+        if let c = ProcessInfo.processInfo.environment["BUTTERFLY_CLIPS"] { Clipboard.shared.seed(c.components(separatedBy: "|")) }
+        // BUTTERFLY_MEMORY="said|did|app;said|did|app" pretends these happened just now.
+        if let mem = ProcessInfo.processInfo.environment["BUTTERFLY_MEMORY"] {
             for e in mem.split(separator: ";") {
                 let f = e.split(separator: "|").map(String.init)
                 if f.count >= 2 { Memory.record(said: f[0], did: f[1], app: f.count > 2 ? f[2] : nil) }
             }
         }
-        // CTRL_APP=Dia pretends that app is in front (for menu commands).
+        // BUTTERFLY_APP=Dia pretends that app is in front (for menu commands).
         var menu: MenuReader.Snapshot?
         var front: NSRunningApplication?
         var elements: [Clicker.Element] = []
-        if let name = ProcessInfo.processInfo.environment["CTRL_APP"],
+        if let name = ProcessInfo.processInfo.environment["BUTTERFLY_APP"],
            let app = NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == name }) {
             front = app
             app.activate(); usleep(400_000)   // like real use: the app is in front
@@ -272,10 +272,10 @@ enum CLI {
             menu = MenuReader.snapshot(of: app)
             print("menu: \(menu?.items.count ?? 0) items read in \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
             let t1 = Date()
-            elements = ProcessInfo.processInfo.environment["CTRL_VISUAL"] == "1" ? [] : Clicker.elements(of: app)
+            elements = ProcessInfo.processInfo.environment["BUTTERFLY_VISUAL"] == "1" ? [] : Clicker.elements(of: app)
             print("clickables: \(elements.count) read in \(Int(Date().timeIntervalSince(t1) * 1000)) ms")
-            if ProcessInfo.processInfo.environment["CTRL_DUMP"] == "2" { elements.forEach { print("   ", $0.role, $0.label) } }
-            if ProcessInfo.processInfo.environment["CTRL_DUMP"] == "1" { menu?.items.forEach { print("   ", $0.key, $0.shortcut ?? "") } }
+            if ProcessInfo.processInfo.environment["BUTTERFLY_DUMP"] == "2" { elements.forEach { print("   ", $0.role, $0.label) } }
+            if ProcessInfo.processInfo.environment["BUTTERFLY_DUMP"] == "1" { menu?.items.forEach { print("   ", $0.key, $0.shortcut ?? "") } }
         }
         Task {
             let start = Date()
@@ -285,8 +285,8 @@ enum CLI {
                 let cursorSnap = front.flatMap(CursorControl.snapshot)
                 if let cursorSnap { print("cursor: \(cursorSnap.chats.count) chats, project \(cursorSnap.currentProject ?? "-"), open: \(cursorSnap.chats.first { $0.current }?.title ?? "-")") }
                 let outcome = try await router.route(text, menu: menu, front: front, elements: elements,
-                                                     previous: env["CTRL_PREV"], dictating: env["CTRL_DICTATING"] == "1", cursor: cursorSnap,
-                                                     recentPlan: env["CTRL_PREVIOUS"]?.components(separatedBy: "|").first)   // CTRL_PREVIOUS="request|steps": a plan just ran
+                                                     previous: env["BUTTERFLY_PREV"], dictating: env["BUTTERFLY_DICTATING"] == "1", cursor: cursorSnap,
+                                                     recentPlan: env["BUTTERFLY_PREVIOUS"]?.components(separatedBy: "|").first)   // BUTTERFLY_PREVIOUS="request|steps": a plan just ran
                 let ms = String(format: "(%.0f ms)", Date().timeIntervalSince(start) * 1000)
                 if case .cursor(let action, let chat, let project, let message) = outcome {
                     print("outcome: cursor \(action.rawValue) chat=\(chat?.title ?? "-") project=\(project ?? "-") message=“\(message)” \(ms)")

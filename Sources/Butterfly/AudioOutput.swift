@@ -138,7 +138,7 @@ enum AudioInput {
         set { UserDefaults.standard.set(newValue, forKey: "micUID") }
     }
 
-    /// The mic CTRL should listen with right now.
+    /// The mic Butterfly should listen with right now.
     static var chosen: Device? {
         let list = devices
         if !preferredUID.isEmpty, let d = list.first(where: { $0.uid == preferredUID }) { return d }

@@ -66,7 +66,7 @@ enum CursorControl {
             if webAreas > 1 { return }
             if role == "AXButton" {
                 let label = [attr(el, kAXTitleAttribute) as String?, attr(el, kAXDescriptionAttribute) as String?].compactMap { $0 }.first { !$0.isEmpty } ?? texts(el).first ?? ""
-                if ProcessInfo.processInfo.environment["CTRL_DUMP"] == "3" { print("  btn[\(section)] \(label)") }
+                if ProcessInfo.processInfo.environment["BUTTERFLY_DUMP"] == "3" { print("  btn[\(section)] \(label)") }
                 if ["Projects", "Pinned", "Workspaces"].contains(label) { section = label; pending = nil }
                 else if label == "New Agent" {
                     // The button before "New Agent" was a project header.
@@ -101,7 +101,7 @@ enum CursorControl {
         }
         walk(window, depth: 0)
         for i in s.chats.indices where openTabs.contains(s.chats[i].title) { s.chats[i].current = true }
-        if ProcessInfo.processInfo.environment["CTRL_DUMP"] == "3" {
+        if ProcessInfo.processInfo.environment["BUTTERFLY_DUMP"] == "3" {
             print("  projects:", Set(s.chats.compactMap(\.project)), "newAgent:", Array(s.newAgent.keys), "tabs:", openTabs)
         }
         s.composer = prompt ?? fields.max { $0.1.minY < $1.1.minY }?.0   // "Prompt", else the lowest box (the chat box sits at the bottom)

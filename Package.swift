@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "CTRL",
+    name: "Butterfly",
     platforms: [.macOS(.v26)],
     dependencies: [
         // Self-updates from GitHub Releases (armandokun/butterfly).
@@ -10,9 +10,9 @@ let package = Package(
     ],
     targets: [
         .executableTarget(
-            name: "CTRL",
+            name: "Butterfly",
             dependencies: [.product(name: "Sparkle", package: "Sparkle")],
-            path: "Sources/CTRL",
+            path: "Sources/Butterfly",
             swiftSettings: [.swiftLanguageMode(.v5)],
             // Sparkle.framework: Butterfly.app/Contents/Frameworks (copied by scripts/build.sh), or next to the binary in .build (CLI flags).
             linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks",

@@ -1,7 +1,7 @@
 import AppKit
 import IOBluetooth
 
-/// Settings CTRL changes itself instead of opening System Settings: "always show the menu bar", "hide the Dock",
+/// Settings Butterfly changes itself instead of opening System Settings: "always show the menu bar", "hide the Dock",
 /// "turn on Night Shift", "show hidden files"… Each one applies immediately (no logout).
 @MainActor
 enum QuickSettings {

@@ -80,7 +80,7 @@ final class Timers: ObservableObject {
         UserDefaults.standard.set(active.map { ["label": $0.label ?? "", "total": $0.total, "ends": $0.ends.timeIntervalSince1970] }, forKey: Self.key)
     }
 
-    /// At launch: timers still running come back; ones that ended while CTRL was closed (≤10 min ago) ring now.
+    /// At launch: timers still running come back; ones that ended while Butterfly was closed (≤10 min ago) ring now.
     func restore() {
         let saved = UserDefaults.standard.array(forKey: Self.key) as? [[String: Any]] ?? []
         for d in saved {

@@ -50,7 +50,7 @@ final class DecisionTrace: ObservableObject {
         r.ms = Int(Date().timeIntervalSince(started) * 1000)
         r.failed = r.nodes.contains { $0.kind == .error }
         runs.insert(r, at: 0)
-        if ProcessInfo.processInfo.environment["CTRL_TIMING"] == "1" { print(Self.text(r)); fflush(stdout) }
+        if ProcessInfo.processInfo.environment["BUTTERFLY_TIMING"] == "1" { print(Self.text(r)); fflush(stdout) }
         if runs.count > 50 { runs.removeLast(runs.count - 50) }
         current = nil
     }
