@@ -2,7 +2,7 @@ import AppKit
 import ServiceManagement
 import SwiftUI
 
-/// Butterfly → Settings… (⌘,). One fixed-size window with a pill tab strip (General · Vocabulary · Routines · Skills · Screen);
+/// Butterfly → Settings… (⌘,). One fixed-size window with a pill tab strip (General · Vocabulary · Routines · Skills · Screen · Developer);
 /// the title follows the pane and the last pane is restored.
 struct SettingsView: View {
     var run: (Routine) -> Void
@@ -14,6 +14,7 @@ struct SettingsView: View {
         ("routines", "Routines", "bolt"),
         ("skills", "Skills", "brain"),
         ("screen", "Screen", "eye"),
+        ("developer", "Developer", "hammer"),
     ]
 
     @Namespace private var tabs
@@ -37,6 +38,7 @@ struct SettingsView: View {
                 case "routines": RoutinesPane(store: .shared, run: run)
                 case "skills": SkillsPane(store: .shared)
                 case "screen": ScreenMemoryPane()
+                case "developer": ScrollView { DeveloperPane() }
                 default: ScrollView { GeneralPane() }
                 }
             }
@@ -94,9 +96,7 @@ private struct GeneralPane: View {
     @State private var trusted = HotkeyMonitor.hasAccessibility
     @State private var appCount = AppCatalog.shared.apps.count
     @State private var login = LoginItem.enabled
-    @AppStorage("developerMode") private var developer = false
     @State private var recording: String?
-    @State private var exported: String?
     @AppStorage("listeningSounds") private var sounds = true
     @AppStorage("duckMusic") private var duck = true
     @AppStorage("recordMeetings") private var recordMeetings = true
@@ -203,11 +203,29 @@ private struct GeneralPane: View {
                         .buttonStyle(.puffy)
                     }
                 }
-                CardRow(title: "\(appCount) apps found") {
+                CardRow(title: "\(appCount) apps found", last: true) {
                     Button("Rescan") { AppCatalog.shared.reload(); appCount = AppCatalog.shared.apps.count }
                         .buttonStyle(.puffy)
                 }
-                CardRow(title: "Developer mode", last: !developer) {
+            }
+            if LoginItem.needsApproval {
+                Button("Allow Butterfly in Login Items") { SMAppService.openSystemSettingsLoginItems() }.buttonStyle(.puffy)
+            }
+        }
+        .padding(Design.margin)
+        .onAppear { trusted = HotkeyMonitor.hasAccessibility; appCount = AppCatalog.shared.apps.count; login = LoginItem.enabled; mics = AudioInput.devices }
+    }
+}
+
+private struct DeveloperPane: View {
+    @AppStorage("developerMode") private var developer = false
+    @State private var exported: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Design.section) {
+            PageTitle(title: "Developer", subtitle: "Record every command to see what Butterfly heard, decided and clicked.")
+            CardSection(title: "Developer mode", footer: "Saves a trace, screenshots and a video of each command in Application Support › Butterfly › debug.") {
+                CardRow(title: "Record every command", last: !developer) {
                     InkToggle(isOn: $developer)
                 }
                 if developer {
@@ -225,12 +243,13 @@ private struct GeneralPane: View {
                     }
                 }
             }
-            if LoginItem.needsApproval {
-                Button("Allow Butterfly in Login Items") { SMAppService.openSystemSettingsLoginItems() }.buttonStyle(.puffy)
+            CardSection(title: "Crash reports", footer: "Written when Butterfly crashes or is killed. Attach them to bug reports.") {
+                CardRow(title: "~/Library/Logs/Butterfly", last: true) {
+                    Button("Reveal") { NSWorkspace.shared.open(CrashReporter.dir.deletingLastPathComponent()) }.buttonStyle(.puffy)
+                }
             }
         }
         .padding(Design.margin)
-        .onAppear { trusted = HotkeyMonitor.hasAccessibility; appCount = AppCatalog.shared.apps.count; login = LoginItem.enabled; mics = AudioInput.devices }
     }
 }
 
