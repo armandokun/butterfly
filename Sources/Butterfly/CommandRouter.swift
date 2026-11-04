@@ -307,6 +307,15 @@ struct CommandRouter {
         }
         if !sites.isEmpty { state["web_addresses_detected"] = sites.joined(separator: ", ") }
         if !known.isEmpty { state["users_known_sites"] = known.joined(separator: ", ") }
+        if let m = DebugRecorder.shared.pastMistakes(transcript, app: front?.localizedName) {
+            state["past_mistakes"] = m
+            state["past_mistakes_note"] = "`past_mistakes`: similar requests where the user said the assistant got it wrong. Don't pick the same intent/target again for the same words."
+            DecisionTrace.shared.add(.context, "past mistakes fed to the router", m.components(separatedBy: "\n").count.description + " lessons")
+        }
+        if DebugRecorder.enabled {
+            DebugRecorder.shared.options(click: Clicker.options(elements, for: transcript, limit: 15).sorted { (Int($0.key.dropFirst()) ?? 0) < (Int($1.key.dropFirst()) ?? 0) }.map(\.value.0),
+                                         menu: menu.map { MenuReader.candidates($0.items.filter { !MenuReader.isDangerous($0) }, for: transcript, limit: 15).map(\.key) } ?? [])
+        }
 
         let asked = Date()
         if ProcessInfo.processInfo.environment["BUTTERFLY_TIMING"] == "1" { print(String(format: "  build questions %.0f ms", asked.timeIntervalSince(routeStart) * 1000)) }
@@ -349,6 +358,12 @@ struct CommandRouter {
             return .routine(routine)
         }
         if intent == "undo" { return .undo }
+        // "Open the weather widget": a desktop widget, read from Notification Centre's AX tree (not the app, not a screenshot).
+        if normalized.firstMatch(of: #/\bwidgets?\b/#) != nil, normalized.firstMatch(of: #/\b(remove|delete|add|edit|close)\b/#) == nil,
+           let w = Clicker.widgetTarget(for: transcript) {
+            DecisionTrace.shared.add(.rule, "→ widget “\(w.label)”", "said “widget” and one matches on the desktop")
+            return .click(w)
+        }
         if intent == "audio_output", let a = response.choice("audio_target") {
             // "none" vs a device whose name you actually said: the name wins.
             var pick = a.choice
@@ -440,6 +455,7 @@ struct CommandRouter {
         }
         if intent == "click" {
             if let a = response.choice("click_target"), a.choice != "none", a.confidence >= 0.5, let el = clickOptions[a.choice] { return .click(el) }
+            if let w = Clicker.widgetTarget(for: transcript, requireName: true) { return .click(w) }
             guard let app = front ?? menu?.app else { return .notACommand }
             return .clickVisual(app, what: transcript)
         }
@@ -602,7 +618,38 @@ struct CommandRouter {
         }
         // Both must agree: "it's here" alone gives false positives (found a "purple elephant").
         guard let b = response.box("target_\(best)"), (response.noul("visible_\(best)") ?? 0) >= 0.5, b.confidence >= 0.3 else { return nil }
-        return Clicker.point(in: shots[best], box: b.box)
+        let coarse = Clicker.point(in: shots[best], box: b.box)
+        return (try? await refine(what, around: Clicker.rect(in: shots[best], box: b.box), display: shots[best].display)) ?? coarse
+    }
+
+    /// Second look: crop ~3× the first box (min 240 pt), ask the Box again on the sharper crop, map back.
+    /// Adjacent look-alikes (desktop widgets, Dock icons) are often off by one on the full-screen shot.
+    @MainActor
+    private func refine(_ what: String, around box: CGRect, display: CGDirectDisplayID) async throws -> CGPoint? {
+        let side = max(240, max(box.width, box.height) * 3)
+        let region = CGRect(x: box.midX - side / 2, y: box.midY - side / 2, width: side, height: side)
+        guard let shot = try await Clicker.screenshot(region: region, display: display) else { return nil }
+        let ref = "img-zoom-" + UUID().uuidString
+        let r = try await client.systemOne(
+            state: ["spoken_command": what, "screen_crop": ref],
+            questions: ["target": .box("the on-screen element in `screen_crop` that the user wants to click, per `spoken_command`. `screen_crop` is a zoomed-in part of the screen; the element is near its center")],
+            images: [.init(ref: ref, jpeg: shot.jpeg)])
+        if ProcessInfo.processInfo.environment["BUTTERFLY_DEBUG"] == "1" { print("  zoom \(shot.frame): \(r.box("target").map { "\($0.box) conf=\(String(format: "%.2f", $0.confidence))" } ?? "-")") }
+        guard let b = r.box("target"), b.confidence >= 0.3 else { return nil }
+        return Clicker.point(in: shot, box: b.box)
+    }
+
+    /// After a click: did the screen change the way `spoken` wanted? If not, where should it have clicked.
+    struct ClickCheck { let done: Double }
+    @MainActor
+    func verifyClick(_ spoken: String, clicked: String, before: Clicker.Shot, after: Clicker.Shot) async throws -> ClickCheck {
+        let (b, a) = ("img-before-" + UUID().uuidString, "img-after-" + UUID().uuidString)
+        let r = try await client.systemOne(
+            state: ["spoken_command": spoken, "what_was_clicked": clicked, "screen_before": b, "screen_after": a],
+            questions: ["done": .noul("Comparing `screen_before` with `screen_after` (just after the click on `what_was_clicked`): did the click do what `spoken_command` asked — the intended thing is now selected, opened, or active, not something else (a different item, app, or widget)?")],
+            images: [.init(ref: b, jpeg: before.jpeg), .init(ref: a, jpeg: after.jpeg)])
+        let done = r.noul("done") ?? 0.5
+        return ClickCheck(done: done)
     }
 
     private static func looksLikeSearch(_ spoken: String) -> Bool {

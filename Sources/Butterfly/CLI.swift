@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import EventKit
 import SwiftUI
 
@@ -50,6 +51,75 @@ enum CLI {
             routeFromCLI(args[(i + 1)...].joined(separator: " ")); return true
         }
         if let i = args.firstIndex(of: "--set-gemini-key"), i + 1 < args.count { Keychain.saveGemini(args[i + 1]); print("saved"); exit(0) }
+        // `--export-debug`: zips the developer-mode debug logs (runs + lessons + INDEX.md) to the Desktop.
+        if args.contains("--export-debug") { print(DebugRecorder.export().map { "exported \($0.path)" } ?? "export failed"); exit(0) }
+        // `--debug-runs`: the last 10 recorded commands, said → outcome → verdict.
+        if args.contains("--debug-runs") {
+            for r in DebugRecorder.allRuns().suffix(10).reversed() { print("“\(r.said)” → \(r.outcome ?? "—") → \(r.verdict)\(r.correction.map { " (“\($0)”)" } ?? "")") }
+            exit(0)
+        }
+        // `--session-selftest`: a listening session with 2 fake runs 3 s apart, then idle → auto-stop after 5 s (temp debug dir).
+        if args.contains("--session-selftest") {
+            if ProcessInfo.processInfo.environment["BUTTERFLY_DEBUG_DIR"] == nil { setenv("BUTTERFLY_DEBUG_DIR", NSTemporaryDirectory() + "butterfly-session-selftest", 1) }
+            try? FileManager.default.removeItem(at: DebugRecorder.root)
+            Task { @MainActor in
+                guard DebugRecorder.enabled else { print("turn developer mode on first"); exit(1) }
+                let t0 = Date(), video = RunVideo.shared, trace = DecisionTrace.shared
+                var busy = true
+                video.onSaved = { dir in
+                    guard let dir else { print("FAIL session discarded"); exit(1) }
+                    Task { @MainActor in
+                        let dur = (try? await AVURLAsset(url: dir.appendingPathComponent("video.mp4")).load(.duration).seconds) ?? 0
+                        let md = (try? String(contentsOf: dir.appendingPathComponent("session.md"), encoding: .utf8)) ?? ""
+                        let runs = DebugRecorder.allRuns()
+                        print(String(format: "stopped %.1f s after start · video %.1f s", Date().timeIntervalSince(t0), dur))
+                        for r in runs { print("run “\(r.said)” @", RunVideo.Session.clock(r.videoOffset ?? -1), "in", r.session ?? "nil") }
+                        let one = Set(runs.compactMap(\.session)).count == 1 && runs.count == 2 && runs.allSatisfy { $0.session != nil }
+                        print(one && md.contains("run.md") ? "ok   one video spans both runs" : "FAIL"); print("dir:", dir.path)
+                        exit(one ? 0 : 1)
+                    }
+                }
+                video.start { (busy, "") }                                   // ⌥ down: listening
+                try? await Task.sleep(for: .seconds(1)); busy = false
+                for (i, said) in ["open notes", "click the weather widget"].enumerated() {
+                    if i > 0 { try? await Task.sleep(for: .seconds(3)) }
+                    trace.begin(said)
+                    trace.add(.outcome, i == 0 ? "open(Notes)" : "click(Weather)", nil, ms: 300)
+                    if i == 1 { video.ring(at: CGPoint(x: CGDisplayBounds(CGMainDisplayID()).midX, y: CGDisplayBounds(CGMainDisplayID()).midY)) }   // ring only, no real click
+                    trace.add(.rule, "click check", i == 1 ? "done 0.90" : nil)
+                    trace.end()
+                }
+                print("runs done at", String(format: "%.1f s", Date().timeIntervalSince(t0)), "· waiting for 5 s idle…")
+            }
+            return true
+        }
+        if args.contains("--debug-selftest") { debugSelftest(); return true }
+        // `--video-selftest`: 4 s of the main display with fake captions + a click ring → mp4 + contact sheet in a temp dir.
+        if args.contains("--video-selftest") {
+            Task { @MainActor in
+                let dir = FileManager.default.temporaryDirectory.appendingPathComponent("butterfly-video-selftest")
+                try? FileManager.default.removeItem(at: dir)
+                try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                let s = RunVideo.Session(display: CGMainDisplayID(), url: dir.appendingPathComponent("video.mp4"))
+                do { try await s.start() } catch { print("start failed:", error); exit(1) }
+                let b = CGDisplayBounds(CGMainDisplayID())
+                s.caption("“click the weather widget”", query: true)
+                for (i, c) in ["Model answered 24 questions", "click(Weather)", "click check — done 0.20", "click check (retry) — done 0.90"].enumerated() {
+                    try? await Task.sleep(for: .seconds(1))
+                    s.caption(c)
+                    if i == 1 { s.ring(CGPoint(x: b.midX, y: b.midY)) }
+                }
+                guard let url = await s.finish() else { print("no video written"); exit(1) }
+                let sheet = dir.appendingPathComponent("contact-sheet.jpg")
+                let ok = await RunVideo.contactSheet(url, captions: s.timeline, to: sheet)
+                let size = { (u: URL) in ByteCountFormatter.string(fromByteCount: Int64((try? FileManager.default.attributesOfItem(atPath: u.path)[.size] as? Int) ?? 0), countStyle: .file) }
+                let dur = (try? await AVURLAsset(url: url).load(.duration).seconds) ?? 0
+                print("video:", url.path, size(url), String(format: "%.1f s", dur), "\(s.width)×\(s.height)")
+                print("sheet:", ok ? "\(sheet.path) \(size(sheet))" : "failed")
+                exit(ok ? 0 : 1)
+            }
+            return true
+        }
         // `--meeting-apps`: which processes use a mic right now (meeting detection).
         if args.contains("--meeting-apps") { print(Meetings.micUsers()); exit(0) }
         // `--memory-test 15`: runs screen memory for N seconds and prints what it captured (debugging).
@@ -74,6 +144,71 @@ enum CLI {
             ScreenMemory.shared.start(); ScreenMemory.shared.stop()
             print(ScreenMemory.shared.count, "screens remembered")
             for h in ScreenMemory.shared.search(args[i + 1]) { print("• [\(ScreenMemory.when(h.entry.t)) · \(h.entry.app) · \(h.entry.title.prefix(40))] score \(h.score)\n   \(h.snippet.prefix(300))") }
+            exit(0)
+        }
+        // `--click-dry Calendar "click on October 27th"`: top-ranked AX click options in that app; clicks nothing.
+        if let i = args.firstIndex(of: "--click-dry"), i + 2 < args.count {
+            guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == args[i + 1] }) else { print("not running"); exit(1) }
+            let els = Clicker.elements(of: app)
+            let opts = Clicker.options(els, for: args[(i + 2)...].joined(separator: " "), limit: 5)
+            print(els.count, "elements,", els.filter { $0.role == "AXList" }.count, "lists")
+            for (k, (d, e)) in opts.sorted(by: { $0.value.1.label.count < $1.value.1.label.count }) { print(k, d.prefix(80).replacingOccurrences(of: "\n", with: " "), e.frame) }
+            exit(0)
+        }
+        // `--verify-dry "click on October 27th"`: before/after check with no click in between (expect done ≈ 0).
+        if let i = args.firstIndex(of: "--verify-dry"), i + 1 < args.count, let key = Keychain.apiKey {
+            Task { @MainActor in
+                let d = CGMainDisplayID()
+                guard let a = try? await Clicker.screenshot(region: CGDisplayBounds(d), display: d),
+                      let b = try? await Clicker.screenshot(region: CGDisplayBounds(d), display: d) else { print("no screenshot"); exit(1) }
+                let c = try? await CommandRouter(client: TypeSafeClient(apiKey: key)).verifyClick(args[i + 1], clicked: args[i + 1], before: a, after: b)
+                print("done:", c.map { String(format: "%.2f", $0.done) } ?? "error")
+                exit(0)
+            }
+            return true
+        }
+        // `--widgets`: desktop widgets (Notification Centre AX) with frames and items.
+        if args.contains("--widgets") {
+            for w in Clicker.widgets() {
+                let f = w.group.frame
+                print("• \(w.app) [\(Int(f.minX)),\(Int(f.minY)) \(Int(f.width))x\(Int(f.height))] window “\(w.title.prefix(50))”")
+                for e in w.items { print("    \(e.role) “\(e.label.prefix(60))” [\(Int(e.frame.minX)),\(Int(e.frame.minY)) \(Int(e.frame.width))x\(Int(e.frame.height))]") }
+            }
+            exit(0)
+        }
+        // `--widget-click-dry "open the weather widget"`: what a widget click would hit; clicks nothing.
+        if let i = args.firstIndex(of: "--widget-click-dry"), i + 1 < args.count {
+            guard let e = Clicker.widgetTarget(for: args[i + 1]) else { print("no widget matches"); exit(1) }
+            let f = e.frame
+            print("\(e.role) “\(e.label.prefix(60))” [\(Int(f.minX)),\(Int(f.minY)) \(Int(f.width))x\(Int(f.height))] → click \(Int(f.midX)),\(Int(f.midY))")
+            exit(0)
+        }
+        // `--actionable Calendar "Today"` (or `--actionable widget "weather"`): resolves the element and runs the click gate; clicks nothing.
+        if let i = args.firstIndex(of: "--actionable"), i + 2 < args.count {
+            let label = args[(i + 2)...].joined(separator: " ")
+            var e: Clicker.Element?
+            if args[i + 1].lowercased() == "widget" { e = Clicker.widgetTarget(for: label) } else {
+                guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == args[i + 1] }) else { print("not running"); exit(1) }
+                let els = Clicker.elements(of: app)
+                e = els.first { $0.label == label } ?? els.first { $0.label.localizedCaseInsensitiveContains(label) }
+            }
+            guard let e else { print("no element “\(label)”"); exit(1) }
+            let f = e.frame
+            print("\(e.role) “\(e.label.prefix(60))” [\(Int(f.minX)),\(Int(f.minY)) \(Int(f.width))x\(Int(f.height))] via \(Clicker.usesPress(e) ? "AXPress" : "mouse click")")
+            Task { @MainActor in
+                let t0 = Date()
+                let g = await Clicker.actionable(e)
+                let ms = Int(Date().timeIntervalSince(t0) * 1000)
+                let p: CGPoint = if case .ok(let p, _) = g { p } else { CGPoint(x: f.midX, y: f.midY) }
+                print("\(g.message) → point \(Int(p.x)),\(Int(p.y)) · hit \(Clicker.hitOwner(at: p)) · \(ms) ms")
+                exit(0)
+            }
+            return true
+        }
+        // `--fingerprint Calendar`: the cheap AX state a click check compares before/after.
+        if let i = args.firstIndex(of: "--fingerprint"), i + 1 < args.count {
+            guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == args[i + 1] }) else { print("not running"); exit(1) }
+            print(Clicker.fingerprint(nil, app: app).summary)
             exit(0)
         }
         // `--ax-dump Slack [depth]`: prints the focused window's accessibility tree (debugging the settings crawl).
@@ -243,6 +378,47 @@ enum CLI {
 
     /// Debug: `Butterfly --route "open facebook dot com"` prints what would happen, opens nothing.
     /// Add `--exec` to actually run it. Starts the work; the caller keeps the run loop alive.
+    /// `--debug-selftest` (developer mode, ideally with BUTTERFLY_DEBUG_DIR=/tmp/…): a fake run with a late click check,
+    /// a voice correction → declined, then checks run.md, lessons.jsonl, past_mistakes, the skill drop and the export.
+    @MainActor private static func debugSelftest() {
+        Task { @MainActor in
+            func check(_ ok: Bool, _ what: String) { print(ok ? "ok  " : "FAIL", what); if !ok { exit(1) } }
+            check(DebugRecorder.enabled, "developer mode on")
+            let trace = DecisionTrace.shared, dbg = DebugRecorder.shared
+            let pattern = "selftest open {thing} widget"
+            SkillStore.shared.learn(name: "Selftest", pattern: pattern, steps: [], example: "selftest open weather widget")
+            trace.begin("click the weather widget")
+            let id = trace.currentID!
+            dbg.context(NSRunningApplication.current, summary: "0 menu items · 3 clickable elements")
+            dbg.options(click: ["the button labeled “Weather”", "the button labeled “Stocks”"], menu: [])
+            dbg.skill(pattern)
+            trace.add(.outcome, "click(Weather)", nil, ms: 120)
+            dbg.hold(id)                                   // a click check still running…
+            dbg.action("performed click(Weather)")
+            trace.end()                                    // …route finished first
+            trace.add(.rule, "click check", "done 0.20", run: id)   // late event lands on the same run
+            let ci = dbg.click("Weather", at: CGPoint(x: 100, y: 200), run: id)
+            dbg.clickUpdate(ci, run: id) { $0.done = 0.2 }
+            dbg.release(id)                                // finalizes now
+            trace.begin("no, the weather widget on the desktop")
+            trace.add(.outcome, "correction", nil); dbg.followUp("no, the weather widget on the desktop", force: true); trace.end()
+            let run = DebugRecorder.allRuns().first { $0.id == id.uuidString }
+            check(run?.verdict == "declined", "verdict declined (\(run?.verdict ?? "nil"))")
+            check(run?.nodes.contains { $0.title == "click check" } == true, "late click-check node on the right run")
+            let md = (try? String(contentsOf: DebugRecorder.runsDir.appendingPathComponent(run?.folder ?? "").appendingPathComponent("run.md"), encoding: .utf8)) ?? ""
+            check(md.contains("Verdict: declined") && md.contains("no, the weather widget"), "run.md has verdict + correction")
+            let lessons = (try? String(contentsOf: DebugRecorder.lessonsURL, encoding: .utf8)) ?? ""
+            check(lessons.contains("click the weather widget"), "lessons.jsonl has the mistake")
+            check(dbg.pastMistakes("click weather", app: nil)?.contains("WRONG") == true, "past_mistakes fed for a similar request")
+            check(!SkillStore.shared.skills.contains { $0.pattern == pattern }, "declined skill dropped")
+            let zip = DebugRecorder.export(to: URL(fileURLWithPath: NSTemporaryDirectory()))
+            check(zip != nil, "export → \(zip?.path ?? "nil")")
+            let index = (try? String(contentsOf: DebugRecorder.root.appendingPathComponent("INDEX.md"), encoding: .utf8)) ?? ""
+            check(index.contains("**declined**") && index.contains("run.md"), "INDEX.md lists the run")
+            exit(0)
+        }
+    }
+
     @MainActor private static func routeFromCLI(_ text: String) {
         let exec = CommandLine.arguments.contains("--exec")
         let text = text.replacingOccurrences(of: "--exec", with: "").trimmingCharacters(in: .whitespaces)

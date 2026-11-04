@@ -8,57 +8,53 @@ struct RoutineEditor: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: Design.section) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text(routine.name.isEmpty ? "Untitled" : routine.name)
-                        .font(Pond.display(28))
-                        .foregroundStyle(Pond.ink)
-                        .padding(.horizontal, 8)
-                        .background(Pond.lavender)
+                    Text(routine.name.isEmpty ? "Untitled" : routine.name).displayText(30).lineLimit(1)
                     Spacer()
-                    Button("▶ Run now") { run(routine) }
-                        .buttonStyle(.pond(Pond.peach))
+                    Button { run(routine) } label: { Label("Run now", systemImage: "play.fill") }
+                        .buttonStyle(.puffyInk)
                         .disabled(!routine.isRunnable)
                         .help(routine.isRunnable ? "Run this routine" : "Add a name and at least one step")
                 }
 
-                PondSection(title: "Trigger", tint: Pond.lime, footer: "Phrases you'd say to start it, separated by commas.") {
-                    PondRow(title: "Name") { PondField(prompt: "Work mode", text: $routine.name).frame(width: 220) }
-                    PondRow(title: "Say it like", last: true) {
-                        PondField(prompt: "work mode, let's get to work", text: $routine.phrases).frame(width: 220)
+                CardSection(title: "Trigger", footer: "Phrases you'd say to start it, separated by commas.") {
+                    CardRow(title: "Name") { SoftField(prompt: "Work mode", text: $routine.name).frame(width: 220) }
+                    CardRow(title: "Say it like", last: true) {
+                        SoftField(prompt: "work mode, let's get to work", text: $routine.phrases).frame(width: 220)
                     }
                 }
 
-                PondSection(title: "Steps", tint: Pond.teal,
+                CardSection(title: "Steps",
                             footer: "Each step is anything you'd say to Butterfly: “open slack”, “play some music”, “switch to dark mode”.") {
                     ForEach(Array(routine.steps.enumerated()), id: \.element.id) { i, step in
                         let binding = Binding(get: { routine.steps.first { $0.id == step.id }?.text ?? "" },
                                               set: { t in if let j = routine.steps.firstIndex(where: { $0.id == step.id }) { routine.steps[j].text = t } })
                         VStack(spacing: 0) {
                             HStack(spacing: 8) {
-                                Text("\(i + 1)").font(Pond.label).foregroundStyle(Pond.ink)
-                                    .frame(width: 20, height: 20).background(Pond.lime)
+                                Text("\(i + 1)").font(Design.label).foregroundStyle(.white)
+                                    .frame(width: 22, height: 22).background(Design.sky, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                                 TextField("", text: binding, prompt: Text("open cursor and slack side by side"))
-                                    .textFieldStyle(.plain).font(Pond.body).foregroundStyle(Pond.ink)
+                                    .textFieldStyle(.plain).font(Design.body).foregroundStyle(Design.ink)
                                     .focused($focusedStep, equals: step.id)
                                     .onSubmit { addStep(after: step.id) }
-                                Button("−") { routine.steps.removeAll { $0.id == step.id } }
-                                    .buttonStyle(.pond(Pond.rose))
+                                Button(role: .destructive) { routine.steps.removeAll { $0.id == step.id } } label: { Image(systemName: "minus") }
+                                    .buttonStyle(.puffy)
                                     .disabled(routine.steps.count == 1)
                                     .help("Remove step")
                             }
-                            .padding(.horizontal, 12).padding(.vertical, 7)
-                            Rectangle().fill(Pond.ink.opacity(0.08)).frame(height: 1)
+                            .padding(.horizontal, Design.pad).padding(.vertical, 9)
+                            Rectangle().fill(Design.hairline).frame(height: 1)
                         }
                     }
                     HStack {
-                        Button("+ Add step") { addStep(after: routine.steps.last?.id) }.buttonStyle(.pond(Pond.teal))
+                        Button { addStep(after: routine.steps.last?.id) } label: { Label("Add step", systemImage: "plus") }.buttonStyle(.puffy)
                         Spacer()
                     }
-                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .padding(.horizontal, Design.pad).padding(.vertical, 12)
                 }
             }
-            .padding(20)
+            .padding(Design.margin)
         }
         .scrollContentBackground(.hidden)
     }

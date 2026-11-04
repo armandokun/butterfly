@@ -123,7 +123,26 @@ final class NotchModel: ObservableObject {
             updateInteractive()
             // Timed out or replaced without an answer: no recording.
             if case .meetingPrompt = oldValue, !isPrompt { Meetings.shared.answer(record: false) }
+            if feedbackRun != nil, phase != oldValue { feedbackRun = nil }   // 👍/👎 belong to the result they were shown with
         }
+    }
+    /// Developer mode: the run the 👍/👎 buttons on the current result rate.
+    @Published private(set) var feedbackRun: UUID? { didSet { updateInteractive() } }
+
+    private func offerFeedback(_ id: UUID) {
+        switch phase {
+        case .opened, .media, .message, .unsure: break
+        case .system(_, let title, _) where !title.hasSuffix("…"): break
+        default: return
+        }
+        show(phase, for: 4)   // long enough to tap
+        feedbackRun = id
+    }
+
+    func feedback(_ good: Bool) {
+        guard let id = feedbackRun else { return }
+        DebugRecorder.shared.verdict(good ? "accepted" : "declined", by: good ? "👍 in the notch" : "👎 in the notch", run: id)
+        show(.badge(symbol: good ? "hand.thumbsup.fill" : "hand.thumbsdown.fill", text: good ? "Thanks" : "Logged", tint: good ? .green : .orange), for: 1.2)
     }
     private var isPrompt: Bool {
         switch phase { case .meetingPrompt, .stopPrompt: true; default: false }
@@ -135,7 +154,7 @@ final class NotchModel: ObservableObject {
     /// The panel tracks the mouse (clicks + hover) while buttons are up or a meeting records.
     var onInteractive: ((Bool) -> Void)?
     private func updateInteractive() {
-        let wants = isPrompt || isReady || recording != nil
+        let wants = isPrompt || isReady || recording != nil || feedbackRun != nil
         if wants != interactive { interactive = wants; onInteractive?(wants) }
     }
 
@@ -201,6 +220,8 @@ final class NotchModel: ObservableObject {
     private var dictating = false
     private var typedInDictation = false   // first dictated sentence gets no leading space
     private var lastActionDisplay: CGDirectDisplayID?
+    /// Why the last click didn't land (gate refused, wrong thing opened, missed after retry): a plan step stops on it.
+    private var clickFailure: String?
     private var pendingPlaylists: ([String], Date)?
     /// A planned action waiting for "yes" (destructive steps ask first).
     private var pendingPlan: (plan: Planner.Plan, request: String, at: Date)?
@@ -435,6 +456,7 @@ final class NotchModel: ObservableObject {
         levels = levels.map { _ in 0 }
         phase = .listening
         if !dictation { MarkGesture.shared.enabled = true }   // while you hold ⌥ you can press-hold-drag to mark something
+        if !dictation { RunVideo.shared.start { [weak self] in self?.videoActivity ?? (false, "") } }   // developer mode: one video per session
         Cues.listening()
         Ducker.duck()
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
@@ -453,6 +475,12 @@ final class NotchModel: ObservableObject {
         }
     }
 
+    /// For the session video: busy = ⌥ held, thinking, a request or "Working…" in flight; plus what it hears.
+    private var videoActivity: (busy: Bool, transcript: String) {
+        var busy = phase == .thinking || requestTask != nil || working || (phase == .listening && !isLocked)
+        if case .system(_, let t, _) = phase, t.hasSuffix("…") { busy = true }
+        return (busy, transcript)
+    }
     private var firstLevel = true
     private var lastFinalizeMs: Int?
     static var t0 = Date()
@@ -507,6 +535,7 @@ final class NotchModel: ObservableObject {
     func unlock() {
         guard isLocked else { return }
         isLocked = false
+        RunVideo.shared.end()
         dictating = false
         dictationOnly = false
         MarkGesture.shared.enabled = false
@@ -659,6 +688,7 @@ final class NotchModel: ObservableObject {
         dictationOnly = false
         MarkGesture.shared.enabled = false
         if MarkOverlay.shared.hasMarks { MarkOverlay.shared.cancel() }
+        RunVideo.shared.end()
         Task {
             await startTask?.value
             await recorder.cancel()
@@ -807,6 +837,10 @@ final class NotchModel: ObservableObject {
         trace.add(.context, frontApp?.localizedName ?? "no front app",
                   "\(menuSnapshot?.items.count ?? 0) menu items · \(clickables.count) clickable elements" + (cursorSnapshot.map { " · Cursor: \($0.chats.count) chats" } ?? ""))
         if let ms = lastFinalizeMs { trace.add(.context, "Speech finalized after release", nil, ms: ms); lastFinalizeMs = nil }
+        let runID = trace.currentID
+        DebugRecorder.shared.context(frontApp, summary: "\(menuSnapshot?.items.count ?? 0) menu items · \(clickables.count) clickable elements" + (cursorSnapshot.map { " · Cursor: \($0.chats.count) chats" } ?? "")
+                                     + (isLocked ? " · locked mode" : "") + (dictating ? " · dictating" : ""))
+        defer { if let runID, DebugRecorder.enabled, !Task.isCancelled { offerFeedback(runID) } }
         defer { trace.end() }
         // Just offered playlists: saying one of them (or "the first one") plays it.
         if let (names, at) = pendingPlaylists, Date().timeIntervalSince(at) < 30 {
@@ -910,6 +944,7 @@ final class NotchModel: ObservableObject {
             default: dictating = false
             }
             trace.add(.outcome, Self.describe(outcome), nil, ms: Int(Date().timeIntervalSince(routed) * 1000))
+            if case .correction = outcome { DebugRecorder.shared.followUp(text, force: true) }
             if case .routine(let r) = outcome { return await run(r, router: router) }
             // Nothing built-in understood it: let the planner work it out from the screen (and learn it for next time).
             if !dictating, !inPlan, Keychain.geminiKey != nil {
@@ -925,6 +960,7 @@ final class NotchModel: ObservableObject {
             let ran = Date()
             await perform(outcome)
             trace.add(.result, Self.describe(phase), nil, ms: Int(Date().timeIntervalSince(ran) * 1000))
+            DebugRecorder.shared.action("performed \(Self.describe(outcome)) → notch: \(Self.describe(phase))")
             remember(text, outcome)
         } catch {
             if Task.isCancelled { return }   // you tapped ⌥ to stop it
@@ -950,6 +986,98 @@ final class NotchModel: ObservableObject {
             try? await Task.sleep(for: .seconds(1.2))
         }
         show(.media(nil, title: r.name, detail: "done"), for: 1.4)
+    }
+
+    /// Click, then check: the AX fingerprint first (cheap, exact), before/after screenshots only when AX can't tell.
+    /// Disposition: verified · wrong (something else changed: never clicked again) · not delivered (nothing changed:
+    /// one corrected retry, except toggles and send/pay/delete-like buttons) · unverified.
+    private func clickChecked(at p: CGPoint, what: String, element: Clicker.Element? = nil, _ click: () -> Void) async {
+        let display = Memory.display(at: p)
+        lastActionDisplay = display
+        let spoken = lastCommand ?? what
+        // The run this click belongs to: its check finishes later, the record stays open until then.
+        let (runID, dbg) = (DecisionTrace.shared.currentID, DebugRecorder.shared)
+        dbg.hold(runID); defer { dbg.release(runID) }
+        let ci = dbg.click(what, at: p, run: runID)
+        let owner = Clicker.hitOwner(at: p)
+        dbg.clickUpdate(ci, run: runID) { $0.hit = owner }
+        func shot() async -> Clicker.Shot? {
+            guard let display, CGPreflightScreenCaptureAccess() else { return nil }
+            return try? await Clicker.screenshot(region: CGDisplayBounds(display), display: display)
+        }
+        func finish(_ d: String, by: String, _ title: String, _ symbol: String, failed: String? = nil) {
+            DecisionTrace.shared.add(.rule, "click \(d)", "via \(by)", run: runID)
+            dbg.clickUpdate(ci, run: runID) { $0.disposition = d; $0.verifiedBy = by }
+            if let failed { dbg.verdict("failed", by: failed, run: runID); clickFailure = title }
+            show(.system(symbol: symbol, title: title, detail: what), for: failed == nil ? 1.2 : 2.2)
+        }
+        let isToggle = element.map { Clicker.toggleRoles.contains($0.role) } ?? false
+        let fp = Clicker.fingerprint(element, app: frontApp)
+        // AX can settle toggles, tabs and buttons on its own: skip the screenshot for those.
+        let before = isToggle ? nil : await shot()
+        dbg.shot(before, "before", click: ci, run: runID)
+        click()
+        show(.system(symbol: "eye", title: "Clicked · checking…", detail: what), for: 6)
+        let (fp2, ax) = await Clicker.settle(element, from: fp, app: frontApp)
+        dbg.clickUpdate(ci, run: runID) { $0.ax = ax.why }
+        DecisionTrace.shared.add(.rule, "click AX check", ax.why, run: runID)
+        if case .verified(let why) = ax { return finish("deliveredVerified", by: "ax: \(why)", "Done", "checkmark.circle") }
+        // A toggle that didn't flip: re-read, never press it again (a second press could flip it the wrong way).
+        if isToggle {
+            try? await Task.sleep(for: .milliseconds(250))
+            let again = element.flatMap { Clicker.fingerprint($0, app: frontApp).value }
+            if again != fp.value { return finish("deliveredVerified", by: "ax re-read", "Done", "checkmark.circle") }
+            return finish("notDelivered", by: "ax: toggle value unchanged", "It didn't change", "exclamationmark.triangle", failed: "toggle “\(what)” didn't flip")
+        }
+        let axChanged = fp2 != fp
+        guard let router, let before else {
+            return finish("deliveredUnverified", by: axChanged ? "ax: \(ax.why)" : "none", "Clicked", "cursorarrow.click")
+        }
+        try? await Task.sleep(for: .milliseconds(100))   // the AX wait already covered most of the screen's settling
+        let after = await shot()
+        dbg.shot(after, "after", click: ci, run: runID)
+        guard let after, let check = try? await router.verifyClick(spoken, clicked: what, before: before, after: after) else {
+            return finish("deliveredUnverified", by: "screenshot check failed", "Clicked", "cursorarrow.click")
+        }
+        DecisionTrace.shared.add(.rule, "click check", String(format: "done %.2f", check.done), run: runID)
+        dbg.clickUpdate(ci, run: runID) { $0.done = check.done }
+        if check.done >= 0.5 { return finish("deliveredVerified", by: String(format: "screenshot %.2f", check.done), "Done", "checkmark.circle") }
+        // Something happened, just not the asked thing: clicking again would stack a second wrong action.
+        if axChanged {
+            return finish("deliveredWrong", by: String(format: "ax changed (%@), screenshot %.2f", ax.why, check.done), "That opened the wrong thing", "exclamationmark.triangle",
+                          failed: "click on “\(what)” changed \(ax.why) but not what was asked")
+        }
+        if Clicker.risky(what) {
+            return finish("notDelivered", by: String(format: "screenshot %.2f, no retry (risky label)", check.done), "Clicked, but it didn't seem to work", "exclamationmark.triangle",
+                          failed: String(format: "click check done %.2f, not retried: “%@” may have gone through", check.done, what))
+        }
+        DecisionTrace.shared.add(.rule, "click notDelivered", "retrying", run: runID)
+        dbg.clickUpdate(ci, run: runID) { $0.disposition = "notDelivered" }
+        // Retry spot: the zoomed locator (precise), told the first spot missed; never the same spot again.
+        let hint = "\(spoken) (a click at \(Int(p.x)),\(Int(p.y)) on screen missed it)"
+        let located = frontApp.flatMap { app in Task { try? await router.locate(hint, in: app) } }
+        let retry = (await located?.value ?? nil).flatMap { hypot($0.x - p.x, $0.y - p.y) > 12 ? $0 : nil }
+        guard let retry else {
+            return finish("notDelivered", by: String(format: "screenshot %.2f, no other spot", check.done), "Clicked, but it didn't seem to work", "exclamationmark.triangle",
+                          failed: String(format: "click check done %.2f, no other spot to retry", check.done))
+        }
+        dbg.clickUpdate(ci, run: runID) { $0.retryX = Int(retry.x); $0.retryY = Int(retry.y) }
+        show(.system(symbol: "arrow.uturn.right", title: "Missed · retrying", detail: what), for: 6)
+        Clicker.click(at: retry)
+        lastActionDisplay = Memory.display(at: retry)
+        try? await Task.sleep(for: .milliseconds(700))
+        let again = await shot()
+        dbg.shot(again, "retry-after", click: ci, run: runID)
+        if let again, let c2 = try? await router.verifyClick(spoken, clicked: what, before: before, after: again) {
+            dbg.clickUpdate(ci, run: runID) { $0.retryDone = c2.done }
+            DecisionTrace.shared.add(.rule, "click check (retry)", String(format: "done %.2f", c2.done), run: runID)
+            if c2.done < 0.5 {
+                return finish("notDelivered", by: String(format: "retry screenshot %.2f", c2.done), "Couldn't hit it", "exclamationmark.triangle",
+                              failed: String(format: "click check done %.2f after retry", c2.done))
+            }
+            return finish("deliveredVerified", by: String(format: "retry screenshot %.2f", c2.done), "Done", "checkmark.circle")
+        }
+        finish("deliveredUnverified", by: "retry not checked", "Clicked", "cursorarrow.click")
     }
 
     private func perform(_ outcome: CommandRouter.Outcome) async {
@@ -1044,18 +1172,21 @@ final class NotchModel: ObservableObject {
                 show(.system(symbol: "doc.questionmark", title: text, detail: nil), for: 1.8)
             case .click(let el):
                 frontApp?.activate()
-                Clicker.press(el)
-                lastActionDisplay = Memory.display(at: CGPoint(x: el.frame.midX, y: el.frame.midY))
-                show(.system(symbol: "cursorarrow.click", title: "Clicked", detail: el.label), for: 1.2)
+                let gate = await Clicker.actionable(el)
+                guard case .ok(let p, let e) = gate else {
+                    DecisionTrace.shared.add(.error, "click gate", "\(gate.message): “\(el.label)”")
+                    DebugRecorder.shared.action("click gate refused “\(el.label)”: \(gate.message)")
+                    clickFailure = gate.message
+                    show(.system(symbol: "hand.raised", title: gate.message, detail: el.label), for: 2.2); break
+                }
+                await clickChecked(at: p, what: e.label, element: e) { Clicker.press(e, at: p) }
             case .clickVisual(let app, let what):
                 show(.system(symbol: "eye", title: "Looking…", detail: what), for: 15)
                 app.activate()
                 guard let router else { return }
                 do {
                     if let p = try await router.locate(what, in: app) {
-                        Clicker.click(at: p)
-                        lastActionDisplay = Memory.display(at: p)
-                        show(.system(symbol: "cursorarrow.click", title: "Clicked", detail: what), for: 1.2)
+                        await clickChecked(at: p, what: what) { Clicker.click(at: p) }
                     } else {
                         show(.system(symbol: "eye.slash", title: "Couldn't find it", detail: what), for: 1.8)
                     }
@@ -1359,16 +1490,26 @@ final class NotchModel: ObservableObject {
             self.inPlan = true; defer { self.inPlan = false }
             self.readFrontApp()   // a previous step may have opened another app
             let front = self.frontApp ?? app
-            guard let o = try? await router.route(command, menu: self.menuSnapshot, front: front, elements: self.clickables) else { return "failed: route" }
+            guard let o = try? await router.route(command, menu: self.menuSnapshot, front: front, elements: self.clickables) else {
+                DebugRecorder.shared.action("plan step “\(command)” → failed: route"); return "failed: route"
+            }
+            DebugRecorder.shared.action("plan step “\(command)” → \(Self.describe(o))")
             switch o {
             case .notACommand, .unsure: return "failed: not understood"
-            default: await self.perform(o); return "ok"
+            default:
+                self.clickFailure = nil
+                await self.perform(o)
+                return self.clickFailure.map { "failed: \($0)" } ?? "ok"
             }
         }
         Planner.openURL = { [weak self] url in self?.openSite(url) }
         Planner.readToggle = { label in Clicker.toggleState(label: label, in: NSWorkspace.shared.frontmostApplication ?? app) }
         Planner.progress = { [weak self] d in self?.show(.media(nil, title: plan.summary, detail: d), for: 30) }
+        DebugRecorder.shared.skill(skillPattern)
+        DebugRecorder.shared.action("plan “\(plan.summary)”: " + plan.steps.map(Planner.describe).joined(separator: " → "))
         let r = await Planner.run(plan.steps, app: app, request: request)
+        DebugRecorder.shared.action("plan result: " + (r.failed.map { "stopped: \($0)" } ?? "ok") + (r.verified ? "" : " · clicks unverified") + (r.said.isEmpty ? "" : " · said: \(r.said.joined(separator: " ").prefix(200))"))
+        if let f = r.failed, f != "cancelled" { DecisionTrace.shared.add(.error, "plan stopped", f) }
         if !r.created.isEmpty {
             let what = r.created.count == 1 ? "removed “\(r.said.last?.components(separatedBy: " · ").first ?? "it")”" : "removed \(r.created.count) items"
             let ids = r.created

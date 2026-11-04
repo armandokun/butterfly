@@ -173,7 +173,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         let glyph = Bundle.main.image(forResource: "menubar") ?? NSImage(systemSymbolName: "waveform", accessibilityDescription: "Butterfly")
         glyph?.isTemplate = true   // follows light/dark menu bar
-        glyph?.size = .init(width: 18, height: 18)
+        glyph?.size = .init(width: 19, height: 19)   // fills the menu bar height so the thin script line reads
         item.button?.image = glyph
         let menu = NSMenu()
         menu.addItem(withTitle: "Settings…", action: #selector(editRoutines), keyEquivalent: ",")

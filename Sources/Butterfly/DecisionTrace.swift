@@ -32,23 +32,31 @@ final class DecisionTrace: ObservableObject {
     private var current: Run?
     private var started = Date()
 
+    /// The run being recorded; async work (click checks) captures it so late nodes land on the right run.
+    var currentID: UUID? { current?.id }
+
     func begin(_ said: String) {
         current = Run(said: said)
         started = Date()
+        DebugRecorder.shared.begin(current!.id, said: said)
     }
 
-    func add(_ node: Node) {
-        current?.nodes.append(node)
+    func add(_ node: Node, run id: UUID? = nil) {
+        guard let id = id ?? currentID else { return }
+        if current?.id == id { current?.nodes.append(node) }
+        else if let i = runs.firstIndex(where: { $0.id == id }) { runs[i].nodes.append(node) }
+        DebugRecorder.shared.node(node, run: id)
     }
 
-    func add(_ kind: Kind, _ title: String, _ detail: String? = nil, ms: Int? = nil) {
-        add(Node(kind: kind, title: title, detail: detail, ms: ms))
+    func add(_ kind: Kind, _ title: String, _ detail: String? = nil, ms: Int? = nil, run id: UUID? = nil) {
+        add(Node(kind: kind, title: title, detail: detail, ms: ms), run: id)
     }
 
     func end() {
         guard var r = current else { return }
         r.ms = Int(Date().timeIntervalSince(started) * 1000)
         r.failed = r.nodes.contains { $0.kind == .error }
+        DebugRecorder.shared.finish(r)
         runs.insert(r, at: 0)
         if ProcessInfo.processInfo.environment["BUTTERFLY_TIMING"] == "1" { print(Self.text(r)); fflush(stdout) }
         if runs.count > 50 { runs.removeLast(runs.count - 50) }
