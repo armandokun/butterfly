@@ -95,6 +95,7 @@ private struct GeneralPane: View {
     @State private var appCount = AppCatalog.shared.apps.count
     @State private var login = LoginItem.enabled
     @AppStorage("developerMode") private var developer = false
+    @State private var recording: String?
     @State private var exported: String?
     @AppStorage("listeningSounds") private var sounds = true
     @AppStorage("duckMusic") private var duck = true
@@ -165,6 +166,14 @@ private struct GeneralPane: View {
                         .disabled(gemini.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
                 }
+                CardRow(title: recording.map { "Recording · \($0)" } ?? "Record a meeting now") {
+                    Button(recording == nil ? "Record" : "Stop") {
+                        Meetings.shared.toggle()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { recording = Meetings.shared.recordingApp }
+                    }
+                    .buttonStyle(.puffy)
+                    .onAppear { recording = Meetings.shared.recordingApp }
+                }
                 CardRow(title: "Meeting notes", last: true) {
                     HStack(spacing: 6) {
                         Button("Transcribe last") { Meetings.shared.retranscribeLast() }.buttonStyle(.puffy)
@@ -202,6 +211,9 @@ private struct GeneralPane: View {
                     InkToggle(isOn: $developer)
                 }
                 if developer {
+                    CardRow(title: "Decision tree") {
+                        Button("Show") { DecisionTreeWindow.shared.toggle() }.buttonStyle(.puffy)
+                    }
                     CardRow(title: "Debug logs · \(exported ?? "every command recorded")", last: true) {
                         HStack(spacing: 6) {
                             Button("Reveal logs") { DebugRecorder.reveal() }.buttonStyle(.puffy)

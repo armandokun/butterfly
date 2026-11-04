@@ -177,16 +177,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.button?.image = glyph
         let menu = NSMenu()
         menu.addItem(withTitle: "Settings…", action: #selector(editRoutines), keyEquivalent: ",")
-        recordItem = menu.addItem(withTitle: "Record Meeting", action: #selector(toggleRecording), keyEquivalent: "")
-        menu.addItem(withTitle: "Meeting Notes", action: #selector(openMeetings), keyEquivalent: "")
-        screenMemoryItem = menu.addItem(withTitle: "Remember My Screen", action: #selector(toggleScreenMemory), keyEquivalent: "")
-        screenMemoryItem?.state = ScreenMemory.shared.enabled ? .on : .off
-        menu.addItem(withTitle: "Forget Screen History", action: #selector(forgetScreen), keyEquivalent: "")
-        menu.delegate = self
-        let tree = menu.addItem(withTitle: "Decision Tree", action: #selector(toggleDecisionTree), keyEquivalent: "d")
-        tree.keyEquivalentModifierMask = [.command, .option]
-        tree.isHidden = !UserDefaults.standard.bool(forKey: "developerMode")
-        decisionTreeItem = tree
         menu.addItem(.separator())
         let update = menu.addItem(withTitle: "Check for Updates…", action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
         update.target = updater
@@ -198,34 +188,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         watchDeveloperMode()
     }
 
-    private var decisionTreeItem: NSMenuItem?
-    private var recordItem: NSMenuItem?
-    private var screenMemoryItem: NSMenuItem?
     private var developerObserver: NSObjectProtocol?
 
-    @objc private func toggleScreenMemory() {
-        ScreenMemory.shared.enabled.toggle()
-        screenMemoryItem?.state = ScreenMemory.shared.enabled ? .on : .off
-    }
-    @objc private func forgetScreen() { ScreenMemory.shared.forgetAll() }
-
-    @objc private func toggleRecording() { Meetings.shared.toggle() }
-    @objc private func openMeetings() { Meetings.openFolder() }
-
-    @objc private func toggleDecisionTree() { DecisionTreeWindow.shared.toggle() }
-
-    /// Developer mode on/off: show or hide the menu item (and close the window when it goes off).
+    /// Developer mode on/off: close the decision tree when it goes off, open it the first time it goes on.
     private func watchDeveloperMode() {
         // Fires for any defaults change, even mid-layout (AppKit registers defaults while SwiftUI draws Settings):
         // act only when the toggle really flips, and after the current layout pass, or SwiftUI aborts.
         var last = UserDefaults.standard.bool(forKey: "developerMode")
-        developerObserver = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: nil) { [weak self] _ in
+        developerObserver = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: nil) { _ in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     let on = UserDefaults.standard.bool(forKey: "developerMode")
                     guard on != last else { return }
                     last = on
-                    self?.decisionTreeItem?.isHidden = !on
                     if !on { DecisionTreeWindow.shared.close() }
                     else if !DecisionTreeWindow.shared.wasShown { DecisionTreeWindow.shared.show() }
                 }
@@ -247,11 +222,4 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-}
-
-extension AppDelegate: NSMenuDelegate {
-    func menuWillOpen(_ menu: NSMenu) {
-        recordItem?.title = Meetings.shared.recordingApp.map { "Stop Recording · \($0)" } ?? "Record Meeting"
-        screenMemoryItem?.state = ScreenMemory.shared.enabled ? .on : .off   // Settings may have toggled it
-    }
 }
