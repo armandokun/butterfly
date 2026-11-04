@@ -7,6 +7,7 @@ struct CTRLMain {
     static func main() {
         // Debug flags (`--plan`, `--route`, `--skills`, …) run without the app: they print and exit.
         if CLI.run(CommandLine.arguments) { RunLoop.main.run(); return }
+        AppDelegate.lastRun = CrashReporter.install()
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate
@@ -17,6 +18,7 @@ struct CTRLMain {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    nonisolated(unsafe) static var lastRun: String?   // CrashReporter's note about the previous run
     private let model = NotchModel()
     private let hotkey = HotkeyMonitor()
     private var panel: NotchPanel?
@@ -70,6 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         setUpMenu()
         LoginItem.applyDefault()
+        if let last = Self.lastRun { print(last) }
         if CommandLine.arguments.contains("--routines") { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.editRoutines() } }
 
         if let b = ProcessInfo.processInfo.environment["CTRL_BADGE"]?.split(separator: "|").map(String.init), b.count == 2 {
