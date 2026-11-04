@@ -11,6 +11,13 @@ Voice control for your Mac, living in the notch. Hold ⌥ and speak: open apps a
 
 Requires macOS 26 or later. Updates install automatically (or menu bar icon → **Check for Updates…**).
 
+## API keys
+
+Paste these in **Settings** (menu bar icon → Settings…). They're stored in your Keychain.
+
+- **[TypeSafe](https://typesafe.ai)**: required for voice commands.
+- **[Gemini](https://aistudio.google.com/apikey)**: optional, for meeting transcripts and reading the screen.
+
 ## Build from source
 
 Needs Xcode 26 (or its Command Line Tools).
