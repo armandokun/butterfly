@@ -5,7 +5,7 @@ let package = Package(
     name: "CTRL",
     platforms: [.macOS(.v26)],
     dependencies: [
-        // Self-updates from GitHub Releases (armandokun/butterfly-releases).
+        // Self-updates from GitHub Releases (armandokun/butterfly).
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.7.0"),
     ],
     targets: [

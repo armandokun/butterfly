@@ -36,8 +36,8 @@ targets:
         CFBundleDisplayName: Butterfly
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
-        # Updates: scripts/release.sh publishes to github.com/armandokun/butterfly-releases
-        SUFeedURL: https://github.com/armandokun/butterfly-releases/releases/latest/download/appcast.xml
+        # Updates: scripts/release.sh publishes to github.com/armandokun/butterfly
+        SUFeedURL: https://github.com/armandokun/butterfly/releases/latest/download/appcast.xml
         SUPublicEDKey: USw1KgVHkB/jXNnMT/bvnUtfRp9Ouda3GTyoCHjs+Po=
         SUEnableAutomaticChecks: true
         LSUIElement: true

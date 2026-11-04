@@ -2,7 +2,7 @@
 # Publishes a Butterfly release that every install picks up (Sparkle checks the feed daily).
 #   ./scripts/release.sh 0.2.0
 # Builds → Developer ID + hardened runtime → notarized + stapled (if set up) → Butterfly.zip
-# → GitHub release on armandokun/butterfly-releases (public) with Butterfly.zip + appcast.xml.
+# → GitHub release on armandokun/butterfly with Butterfly.zip + appcast.xml.
 # One-time setup (optional; without it, first open needs Open Anyway):
 #   xcrun notarytool store-credentials CTRL --apple-id <you@icloud.com> --team-id NLHT9F6F5X
 #   Sparkle signing key lives in the login keychain ("butterfly"); back it up:
@@ -11,7 +11,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 VERSION=${1:?usage: release.sh <version, e.g. 0.2.0>}
-REPO=armandokun/butterfly-releases
+REPO=armandokun/butterfly
 SPARKLE=.build/artifacts/sparkle/Sparkle/bin
 [[ -z "$(git status --porcelain)" ]] || { echo "Commit or stash your changes first."; exit 1; }
 NOTARIZE=0; xcrun notarytool history --keychain-profile CTRL >/dev/null 2>&1 && NOTARIZE=1
