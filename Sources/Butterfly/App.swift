@@ -175,6 +175,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.addItem(withTitle: "Settings…", action: #selector(editRoutines), keyEquivalent: ",")
         menu.addItem(.separator())
+        recordItem = menu.addItem(withTitle: "Record Meeting", action: #selector(toggleRecording), keyEquivalent: "")
+        menu.addItem(withTitle: "Meeting Notes", action: #selector(openMeetings), keyEquivalent: "")
+        menu.delegate = self
+        menu.addItem(.separator())
         let update = menu.addItem(withTitle: "Check for Updates…", action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
         update.target = updater
         update.isHidden = !Updates.bundled
@@ -186,6 +190,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private var developerObserver: NSObjectProtocol?
+    private var recordItem: NSMenuItem?
+
+    @objc private func toggleRecording() { Meetings.shared.toggle() }
+    @objc private func openMeetings() { Meetings.openFolder() }
 
     /// Developer mode on/off: close the decision tree when it goes off, open it the first time it goes on.
     private func watchDeveloperMode() {
@@ -219,4 +227,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+}
+
+extension AppDelegate: NSMenuDelegate {
+    func menuWillOpen(_ menu: NSMenu) {
+        recordItem?.title = Meetings.shared.recordingApp.map { "Stop Recording · \($0)" } ?? "Record Meeting"
+    }
 }

@@ -187,34 +187,23 @@ private struct ListeningPane: View {
 
 private struct MeetingsPane: View {
     @AppStorage("recordMeetings") private var ask = true
-    @State private var recording = Meetings.shared.recordingApp
     @AppStorage("settingsPane") private var pane = "meetings"
 
     var body: some View {
         PageBody {
-            CardSection(title: "Recording", footer: "Zoom, Teams, Meet, Slack and FaceTime calls. Records the call audio and your mic.") {
-                CardRow(title: "Ask to record when a call starts") {
+            CardSection(title: "Recording", footer: "Zoom, Teams, Meet, Slack and FaceTime calls. Records the call audio and your mic. To record any time: menu bar icon → Record Meeting.") {
+                CardRow(title: "Ask to record when a call starts", last: true) {
                     InkToggle(isOn: $ask)
                 }
-                CardRow(title: recording.map { "Recording · \($0)" } ?? "Record now", last: true) {
-                    Button(recording == nil ? "Record" : "Stop") {
-                        Meetings.shared.toggle()
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { recording = Meetings.shared.recordingApp }
-                    }
-                    .buttonStyle(recording == nil ? .puffy : .puffyInk)
-                }
             }
-            CardSection(title: "Transcripts", footer: "Gemini writes them, in Lithuanian or English. Saved in Documents › Butterfly Meetings.") {
+            CardSection(title: "Transcripts", footer: "Gemini writes them, in Lithuanian or English. Saved in Documents › Butterfly Meetings (menu bar icon → Meeting Notes).") {
                 if Keychain.geminiKey == nil {
                     CardRow(title: "Needs a Gemini API key") {
                         Button("Add Key") { pane = "keys" }.buttonStyle(.puffyInk)
                     }
                 }
-                CardRow(title: "Last meeting") {
+                CardRow(title: "Last meeting", last: true) {
                     Button("Transcribe Again") { Meetings.shared.retranscribeLast() }.buttonStyle(.puffy)
-                }
-                CardRow(title: "All meeting notes", last: true) {
-                    Button("Open Folder") { Meetings.openFolder() }.buttonStyle(.puffy)
                 }
             }
         }
