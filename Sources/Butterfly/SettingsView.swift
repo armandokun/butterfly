@@ -1,53 +1,55 @@
 import AppKit
+import AVFoundation
+import EventKit
 import ServiceManagement
+import Speech
 import SwiftUI
 
-/// Butterfly → Settings… (⌘,). One fixed-size window with a pill tab strip (General · Vocabulary · Routines · Skills · Screen · Developer);
-/// the title follows the pane and the last pane is restored.
+/// Butterfly → Settings… (⌘,). Laid out like System Settings: a grouped sidebar on the left, one page on the right.
+/// Each page holds only the controls that belong together; the last page is restored.
 struct SettingsView: View {
     var run: (Routine) -> Void
     @AppStorage("settingsPane") private var pane = "general"
 
-    private static let panes: [(id: String, title: String, icon: String)] = [
-        ("general", "General", "gearshape"),
-        ("vocabulary", "Vocabulary", "character.book.closed"),
-        ("routines", "Routines", "bolt"),
-        ("skills", "Skills", "brain"),
-        ("screen", "Screen", "eye"),
-        ("developer", "Developer", "hammer"),
+    struct Page: Identifiable { let id, title, icon: String; let tint: Color }
+    static let groups: [[Page]] = [
+        [Page(id: "general", title: "General", icon: "gearshape.fill", tint: Design.slate),
+         Page(id: "listening", title: "Listening", icon: "waveform", tint: Design.pink),
+         Page(id: "vocabulary", title: "Vocabulary", icon: "character.book.closed.fill", tint: Design.orange)],
+        [Page(id: "routines", title: "Routines", icon: "bolt.fill", tint: Design.violet),
+         Page(id: "skills", title: "Learned Skills", icon: "brain.fill", tint: Design.green)],
+        [Page(id: "meetings", title: "Meetings", icon: "video.fill", tint: Design.sky),
+         Page(id: "screen", title: "Screen Memory", icon: "eye.fill", tint: Design.slate)],
+        [Page(id: "keys", title: "API Keys", icon: "key.fill", tint: Design.orange),
+         Page(id: "permissions", title: "Permissions", icon: "hand.raised.fill", tint: Design.sky)],
+        [Page(id: "developer", title: "Developer", icon: "hammer.fill", tint: Design.ink)],
     ]
-
-    @Namespace private var tabs
+    private var current: Page { Self.groups.joined().first { $0.id == pane } ?? Self.groups[0][0] }
 
     var body: some View {
-        VStack(spacing: 0) {
-            GlassEffectContainer(spacing: 4) {
-                HStack(spacing: 4) {
-                    ForEach(Self.panes, id: \.id) { p in
-                        PaneTab(title: p.title, icon: p.icon, selected: pane == p.id, ns: tabs) {
-                            withAnimation(.bouncy(duration: 0.35)) { pane = p.id }
-                        }
-                    }
-                }
-            }
-            .padding(.vertical, 14)
-            .frame(maxWidth: .infinity)
+        HStack(spacing: 0) {
+            Sidebar(groups: Self.groups, selection: $pane)
             Group {
-                switch pane {
+                switch current.id {
+                case "listening": ScrollView { ListeningPane() }
                 case "vocabulary": VocabularyPane()
                 case "routines": RoutinesPane(store: .shared, run: run)
                 case "skills": SkillsPane(store: .shared)
+                case "meetings": ScrollView { MeetingsPane() }
                 case "screen": ScreenMemoryPane()
+                case "keys": ScrollView { KeysPane() }
+                case "permissions": ScrollView { PermissionsPane() }
                 case "developer": ScrollView { DeveloperPane() }
                 default: ScrollView { GeneralPane() }
                 }
             }
+            .id(current.id)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .frame(width: 640, height: 660)
+        .frame(width: 760, height: 600)
         .background(Backdrop())
         .containerBackground(.clear, for: .window)
-        .navigationTitle(Self.panes.first { $0.id == pane }?.title ?? "Settings")
+        .navigationTitle(current.title)
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .tint(Design.ink)
         .accentColor(Design.ink)
@@ -55,92 +57,110 @@ struct SettingsView: View {
     }
 }
 
-/// Settings pane switcher: glass capsule segments; the selected one is ink-tinted glass that morphs between tabs.
-private struct PaneTab: View {
-    let title: String, icon: String, selected: Bool
-    let ns: Namespace.ID
-    let action: () -> Void
-    @State private var hover = false
-    var body: some View {
-        Button(action: action) {
-            Label(title, systemImage: icon)
-                .font(.system(size: 12.5, weight: .medium)).tracking(-0.1)
-                .lineLimit(1).fixedSize()
-                .foregroundStyle(selected ? .white : Design.ink.opacity(hover ? 1 : 0.8))
-                .padding(.horizontal, 11).frame(height: 32)
-                .contentShape(Capsule())
-                .glassEffect(selected ? .regular.tint(Design.ink).interactive() : .regular.interactive(), in: .capsule)
-                .glassEffectID(selected ? "selected" : title, in: ns)
-        }
-        .buttonStyle(.plain)
-        .onHover { hover = $0 }
-    }
-}
-
-/// Page header: editorial serif title and a gray line under it, centered.
-private struct PageTitle: View {
-    let title: String
-    var subtitle: String? = nil
-    var body: some View {
-        VStack(spacing: 6) {
-            Text(title).displayText(32)
-            if let subtitle { Text(subtitle).secondaryText(.system(size: 14)).multilineTextAlignment(.center) }
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.top, 6).padding(.bottom, 4)
-    }
-}
-
-private struct GeneralPane: View {
-    @State private var key = ""
-    @State private var hasKey = Keychain.apiKey != nil
-    @State private var trusted = HotkeyMonitor.hasAccessibility
-    @State private var appCount = AppCatalog.shared.apps.count
-    @State private var login = LoginItem.enabled
-    @State private var recording: String?
-    @AppStorage("listeningSounds") private var sounds = true
-    @AppStorage("duckMusic") private var duck = true
-    @AppStorage("recordMeetings") private var recordMeetings = true
-    @State private var gemini = ""
-    @State private var hasGemini = Keychain.geminiKey != nil
-    @State private var mic = AudioInput.preferredUID
-    @State private var mics = AudioInput.devices
+/// System Settings–style sidebar: groups separated by space, a colored icon square per page.
+private struct Sidebar: View {
+    let groups: [[SettingsView.Page]]
+    @Binding var selection: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Design.section) {
-            VStack(spacing: 18) {
-                if let art = Bundle.main.image(forResource: "mark") {
-                    Image(nsImage: art).resizable().scaledToFit().frame(width: 64, height: 64)
-                }
-                PageTitle(title: "A faithful computer", subtitle: "Hold ⌥ and speak. Butterfly does the rest.")
-                GlassEffectContainer(spacing: 10) {
-                HStack(spacing: 10) {
-                    WidgetTile(title: "Speak", symbol: "waveform", caption: "Hold ⌥", tint: Design.pink)
-                    WidgetTile(title: "Meetings", symbol: "video.fill", caption: recordMeetings ? "Asks to record" : "Off", tint: Design.sky)
-                    WidgetTile(title: "Routines", symbol: "bolt.fill", caption: "One phrase", tint: Design.orange)
-                    WidgetTile(title: "Memory", symbol: "eye.fill", caption: ScreenMemory.shared.enabled ? "On" : "Off", tint: Design.slate)
-                    WidgetTile(title: "Keys", symbol: hasKey ? "checkmark.seal.fill" : "key.fill", caption: hasKey ? "Saved" : "Add a key", tint: Design.green, filled: false)
-                }
-                }
-            }
-            .frame(maxWidth: .infinity)
-
-            CardSection(title: "TypeSafe", footer: "Stored in your Keychain. Get one at typesafe.ai.") {
-                CardRow(title: "API key", last: true) {
-                    HStack(spacing: 6) {
-                        SoftField(prompt: hasKey ? "Saved in Keychain" : "apikey_…", text: $key, secure: true).frame(width: 200)
-                        Button("Save") {
-                            Keychain.save(key.trimmingCharacters(in: .whitespacesAndNewlines))
-                            key = ""; hasKey = true
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                ForEach(groups.indices, id: \.self) { g in
+                    VStack(spacing: 2) {
+                        ForEach(groups[g]) { p in
+                            Button { selection = p.id } label: {
+                                HStack(spacing: 9) {
+                                    Image(systemName: p.icon)
+                                        .font(.system(size: 11, weight: .semibold)).foregroundStyle(.white)
+                                        .frame(width: 22, height: 22)
+                                        .background(p.tint, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                                    Text(p.title).font(Design.body).foregroundStyle(selection == p.id ? .white : Design.ink)
+                                    Spacer(minLength: 0)
+                                }
+                                .padding(.horizontal, 7).frame(height: 32)
+                                .background(selection == p.id ? Design.ink.opacity(0.85) : .clear, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.puffyInk)
-                        .disabled(key.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
                 }
             }
+            .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 16)
+        }
+        .frame(width: 210)
+        .background(.white.opacity(0.35))
+        .overlay(alignment: .trailing) { Rectangle().fill(Design.hairline).frame(width: 1) }
+    }
+}
 
-            CardSection(title: "Microphone",
-                        footer: "Automatic uses your Mac's input, and an external mic (like a Studio Display) when the lid is closed.") {
+/// Page body: sections stacked with even spacing.
+private struct PageBody<Content: View>: View {
+    @ViewBuilder var content: () -> Content
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) { content() }
+            .padding(.horizontal, 24).padding(.vertical, 20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+// MARK: - General
+
+private struct GeneralPane: View {
+    @State private var login = LoginItem.enabled
+    @State private var autoUpdate = Updates.controller.updater.automaticallyChecksForUpdates
+    private var version: String {
+        let i = Bundle.main.infoDictionary
+        return "Version \(i?["CFBundleShortVersionString"] as? String ?? "dev") (\(i?["CFBundleVersion"] as? String ?? "0"))"
+    }
+
+    var body: some View {
+        PageBody {
+            HStack(spacing: 14) {
+                if let art = Bundle.main.image(forResource: "mark") {
+                    Image(nsImage: art).resizable().scaledToFit().frame(width: 52, height: 52)
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Butterfly").displayText(24)
+                    Text("Hold ⌥ and speak. \(version)").secondaryText(.system(size: 12.5))
+                }
+            }
+            CardSection(title: "Startup") {
+                CardRow(title: "Open at login", last: !LoginItem.needsApproval) {
+                    InkToggle(isOn: $login).onChange(of: login) { LoginItem.set(login); login = LoginItem.enabled }
+                }
+                if LoginItem.needsApproval {
+                    CardRow(title: "Needs approval in Login Items", last: true) {
+                        Button("Open") { SMAppService.openSystemSettingsLoginItems() }.buttonStyle(.puffy)
+                    }
+                }
+            }
+            CardSection(title: "Updates", footer: Updates.bundled ? nil : "Updates are off in development builds.") {
+                CardRow(title: "Check for updates automatically") {
+                    InkToggle(isOn: $autoUpdate)
+                        .onChange(of: autoUpdate) { Updates.controller.updater.automaticallyChecksForUpdates = autoUpdate }
+                        .disabled(!Updates.bundled)
+                }
+                CardRow(title: "Check now", last: true) {
+                    Button("Check for Updates…") { Updates.controller.checkForUpdates(nil) }.buttonStyle(.puffy).disabled(!Updates.bundled)
+                }
+            }
+        }
+        .onAppear { login = LoginItem.enabled }
+    }
+}
+
+// MARK: - Listening
+
+private struct ListeningPane: View {
+    @State private var mic = AudioInput.preferredUID
+    @State private var mics = AudioInput.devices
+    @AppStorage("listeningSounds") private var sounds = true
+    @AppStorage("duckMusic") private var duck = true
+
+    var body: some View {
+        PageBody {
+            CardSection(title: "Microphone", footer: "Automatic uses your Mac's mic, or an external one (like a Studio Display) when the lid is closed.") {
                 CardRow(title: "Listen with", last: true) {
                     Picker("", selection: $mic) {
                         Text("Automatic · \(AudioInput.chosen.map(\.name) ?? "none")").tag("")
@@ -150,82 +170,152 @@ private struct GeneralPane: View {
                     .onChange(of: mic) { AudioInput.preferredUID = mic }
                 }
             }
+            CardSection(title: "While listening") {
+                CardRow(title: "Play start and stop sounds") {
+                    InkToggle(isOn: $sounds).onChange(of: sounds) { if sounds { Cues.listening() } }
+                }
+                CardRow(title: "Lower music volume", last: true) {
+                    InkToggle(isOn: $duck)
+                }
+            }
+        }
+        .onAppear { mics = AudioInput.devices }
+    }
+}
 
-            CardSection(title: "Meetings",
-                        footer: "When Zoom, Teams, Meet, Slack or FaceTime start a call, the notch asks to record it (the call and your mic). Gemini writes the transcript (Lithuanian and English). Saved in Documents › Butterfly Meetings.") {
+// MARK: - Meetings
+
+private struct MeetingsPane: View {
+    @AppStorage("recordMeetings") private var ask = true
+    @State private var recording = Meetings.shared.recordingApp
+    @AppStorage("settingsPane") private var pane = "meetings"
+
+    var body: some View {
+        PageBody {
+            CardSection(title: "Recording", footer: "Zoom, Teams, Meet, Slack and FaceTime calls. Records the call audio and your mic.") {
                 CardRow(title: "Ask to record when a call starts") {
-                    InkToggle(isOn: $recordMeetings)
+                    InkToggle(isOn: $ask)
                 }
-                CardRow(title: "Gemini API key") {
-                    HStack(spacing: 6) {
-                        SoftField(prompt: hasGemini ? "Saved in Keychain" : "AIza…", text: $gemini, secure: true).frame(width: 200)
-                        Button("Save") {
-                            Keychain.saveGemini(gemini.trimmingCharacters(in: .whitespacesAndNewlines))
-                            gemini = ""; hasGemini = true
-                        }
-                        .buttonStyle(.puffyInk)
-                        .disabled(gemini.trimmingCharacters(in: .whitespaces).isEmpty)
-                    }
-                }
-                CardRow(title: recording.map { "Recording · \($0)" } ?? "Record a meeting now") {
+                CardRow(title: recording.map { "Recording · \($0)" } ?? "Record now", last: true) {
                     Button(recording == nil ? "Record" : "Stop") {
                         Meetings.shared.toggle()
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { recording = Meetings.shared.recordingApp }
                     }
-                    .buttonStyle(.puffy)
-                    .onAppear { recording = Meetings.shared.recordingApp }
-                }
-                CardRow(title: "Meeting notes", last: true) {
-                    HStack(spacing: 6) {
-                        Button("Transcribe last") { Meetings.shared.retranscribeLast() }.buttonStyle(.puffy)
-                        Button("Open folder") { Meetings.openFolder() }.buttonStyle(.puffy)
-                    }
+                    .buttonStyle(recording == nil ? .puffy : .puffyInk)
                 }
             }
-
-            CardSection(title: "System") {
-                CardRow(title: "Sounds when listening starts and stops") {
-                    InkToggle(isOn: $sounds)
-                        .onChange(of: sounds) { if sounds { Cues.listening() } }
-                }
-                CardRow(title: "Lower music while listening") {
-                    InkToggle(isOn: $duck)
-                }
-                CardRow(title: "Open at login") {
-                    InkToggle(isOn: $login)
-                        .onChange(of: login) { LoginItem.set(login); login = LoginItem.enabled }
-                }
-                CardRow(title: "Accessibility") {
-                    if trusted { Tag(text: "Allowed", tint: Design.green) }
-                    else {
-                        Button("Open System Settings") {
-                            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
-                        }
-                        .buttonStyle(.puffy)
+            CardSection(title: "Transcripts", footer: "Gemini writes them, in Lithuanian or English. Saved in Documents › Butterfly Meetings.") {
+                if Keychain.geminiKey == nil {
+                    CardRow(title: "Needs a Gemini API key") {
+                        Button("Add Key") { pane = "keys" }.buttonStyle(.puffyInk)
                     }
                 }
-                CardRow(title: "\(appCount) apps found", last: true) {
-                    Button("Rescan") { AppCatalog.shared.reload(); appCount = AppCatalog.shared.apps.count }
-                        .buttonStyle(.puffy)
+                CardRow(title: "Last meeting") {
+                    Button("Transcribe Again") { Meetings.shared.retranscribeLast() }.buttonStyle(.puffy)
                 }
-            }
-            if LoginItem.needsApproval {
-                Button("Allow Butterfly in Login Items") { SMAppService.openSystemSettingsLoginItems() }.buttonStyle(.puffy)
+                CardRow(title: "All meeting notes", last: true) {
+                    Button("Open Folder") { Meetings.openFolder() }.buttonStyle(.puffy)
+                }
             }
         }
-        .padding(Design.margin)
-        .onAppear { trusted = HotkeyMonitor.hasAccessibility; appCount = AppCatalog.shared.apps.count; login = LoginItem.enabled; mics = AudioInput.devices }
     }
 }
+
+// MARK: - API keys
+
+private struct KeysPane: View {
+    var body: some View {
+        PageBody {
+            KeySection(title: "TypeSafe", footer: "Required for voice commands. Get one at typesafe.ai.", prompt: "apikey_…",
+                       saved: Keychain.apiKey != nil, save: Keychain.save)
+            KeySection(title: "Gemini", footer: "For meeting transcripts and reading your screen. Get one at aistudio.google.com.", prompt: "AIza…",
+                       saved: Keychain.geminiKey != nil, save: Keychain.saveGemini)
+            Text("Keys are stored in your Keychain and never leave this Mac except to call their service.").secondaryText().padding(.horizontal, 4)
+        }
+    }
+}
+
+private struct KeySection: View {
+    let title: String, footer: String, prompt: String
+    @State var saved: Bool
+    let save: (String) -> Void
+    @State private var key = ""
+
+    var body: some View {
+        CardSection(title: title, footer: footer) {
+            CardRow(title: "API key", last: true) {
+                HStack(spacing: 8) {
+                    if saved && key.isEmpty { Tag(text: "Saved", tint: Design.green) }
+                    SoftField(prompt: saved ? "Replace key" : prompt, text: $key, secure: true).frame(width: 190)
+                    Button("Save") {
+                        save(key.trimmingCharacters(in: .whitespacesAndNewlines)); key = ""; saved = true
+                    }
+                    .buttonStyle(.puffyInk)
+                    .disabled(key.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Permissions
+
+/// Every permission Butterfly uses, with its live status and a shortcut to the right System Settings pane.
+private struct PermissionsPane: View {
+    struct Item { let title, why, pane: String; let granted: () -> Bool }
+    private static let items: [Item] = [
+        Item(title: "Accessibility", why: "Hotkey, typing and clicking", pane: "Privacy_Accessibility", granted: { HotkeyMonitor.hasAccessibility }),
+        Item(title: "Microphone", why: "Hearing what you say", pane: "Privacy_Microphone",
+             granted: { AVCaptureDevice.authorizationStatus(for: .audio) == .authorized }),
+        Item(title: "Speech Recognition", why: "On-device transcription", pane: "Privacy_SpeechRecognition",
+             granted: { SFSpeechRecognizer.authorizationStatus() == .authorized }),
+        Item(title: "Screen Recording", why: "Screen memory and reading the screen", pane: "Privacy_ScreenCapture",
+             granted: { CGPreflightScreenCaptureAccess() }),
+        Item(title: "Calendars", why: "Adding events, your agenda", pane: "Privacy_Calendars",
+             granted: { EKEventStore.authorizationStatus(for: .event) == .fullAccess }),
+        Item(title: "Reminders", why: "Creating reminders", pane: "Privacy_Reminders",
+             granted: { EKEventStore.authorizationStatus(for: .reminder) == .fullAccess }),
+    ]
+    @State private var status: [Bool] = []
+    private let tick = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        PageBody {
+            CardSection(title: "Privacy", footer: "Butterfly asks for each one the first time it's needed.") {
+                ForEach(Self.items.indices, id: \.self) { i in
+                    let item = Self.items[i]
+                    CardRow(title: item.title, last: i == Self.items.count - 1) {
+                        HStack(spacing: 8) {
+                            Text(item.why).secondaryText()
+                            if status.indices.contains(i), status[i] { Tag(text: "Allowed", tint: Design.green) }
+                            else {
+                                Button("Allow…") {
+                                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?\(item.pane)")!)
+                                }
+                                .buttonStyle(.puffy)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .onAppear(perform: refresh)
+        .onReceive(tick) { _ in refresh() }   // reflects changes made in System Settings
+    }
+
+    private func refresh() { status = Self.items.map { $0.granted() } }
+}
+
+// MARK: - Developer
 
 private struct DeveloperPane: View {
     @AppStorage("developerMode") private var developer = false
     @State private var exported: String?
+    @State private var appCount = AppCatalog.shared.apps.count
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Design.section) {
-            PageTitle(title: "Developer", subtitle: "Record every command to see what Butterfly heard, decided and clicked.")
-            CardSection(title: "Developer mode", footer: "Saves a trace, screenshots and a video of each command in Application Support › Butterfly › debug.") {
+        PageBody {
+            CardSection(title: "Developer mode", footer: "Saves a trace, screenshots and a video of each command.") {
                 CardRow(title: "Record every command", last: !developer) {
                     InkToggle(isOn: $developer)
                 }
@@ -244,15 +334,19 @@ private struct DeveloperPane: View {
                     }
                 }
             }
-            CardSection(title: "Crash reports", footer: "Written when Butterfly crashes or is killed. Attach them to bug reports.") {
-                CardRow(title: "~/Library/Logs/Butterfly", last: true) {
+            CardSection(title: "Diagnostics", footer: "Crash reports are written when Butterfly crashes or is killed. Attach them to bug reports.") {
+                CardRow(title: "Crash reports") {
                     Button("Reveal") { NSWorkspace.shared.open(CrashReporter.dir.deletingLastPathComponent()) }.buttonStyle(.puffy)
+                }
+                CardRow(title: "App index · \(appCount) apps", last: true) {
+                    Button("Rescan") { AppCatalog.shared.reload(); appCount = AppCatalog.shared.apps.count }.buttonStyle(.puffy)
                 }
             }
         }
-        .padding(Design.margin)
     }
 }
+
+// MARK: - Vocabulary, Routines, Learned Skills, Screen Memory
 
 private struct VocabularyPane: View {
     struct Word: Identifiable, Equatable { var id = UUID(); var text: String }
@@ -262,7 +356,6 @@ private struct VocabularyPane: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Design.section) {
-                PageTitle(title: "Words Butterfly should hear right")
                 CardSection(title: "Vocabulary",
                             footer: "Names and web addresses, like “openmail.sh” or a colleague's name.") {
                     ForEach($words) { $w in
@@ -285,7 +378,7 @@ private struct VocabularyPane: View {
                     .padding(.horizontal, Design.pad).padding(.vertical, 12)
                 }
             }
-            .padding(Design.margin)
+            .padding(.horizontal, 24).padding(.vertical, 20)
         }
                 .onChange(of: words) { Vocabulary.save(words.map(\.text)) }
     }
@@ -336,7 +429,7 @@ private struct RoutinesPane: View {
                 }
             }
             .padding(12)
-            .frame(width: 180)
+            .frame(width: 160)
             .softCard(radius: Design.radius)
             .padding([.leading, .vertical], 20)
 
@@ -375,7 +468,6 @@ private struct SkillsPane: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Design.section) {
-                PageTitle(title: "Things Butterfly learned")
                 if store.skills.isEmpty {
                     Text("Nothing yet. The first time a request needs working out, the finished plan is kept here and runs instantly next time.")
                         .secondaryText(.system(size: 14))
@@ -405,7 +497,7 @@ private struct SkillsPane: View {
                     }
                 }
             }
-            .padding(Design.margin)
+            .padding(.horizontal, 24).padding(.vertical, 20)
         }
     }
 }
@@ -422,7 +514,6 @@ private struct ScreenMemoryPane: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Design.section) {
-                PageTitle(title: "What was on your screen")
                 CardSection(title: "Screen memory",
                             footer: "Every few seconds the front window is read (on-device OCR) and kept with its time and app, so you can ask “what was the price I saw on Stride?” or “what did I do in the last hour?”. Text stays 30 days, frames 7 days, encrypted with a key in your Keychain. Nothing leaves the Mac until you ask about it.") {
                     CardRow(title: "Remember my screen") {
@@ -455,7 +546,7 @@ private struct ScreenMemoryPane: View {
                     .padding(.horizontal, Design.pad).padding(.vertical, 12)
                 }
             }
-            .padding(Design.margin)
+            .padding(.horizontal, 24).padding(.vertical, 20)
         }
         .onChange(of: excluded) { ScreenMemory.excludedApps = excluded }
         .onAppear(perform: refresh)

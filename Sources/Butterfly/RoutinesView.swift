@@ -19,9 +19,9 @@ struct RoutineEditor: View {
                 }
 
                 CardSection(title: "Trigger", footer: "Phrases you'd say to start it, separated by commas.") {
-                    CardRow(title: "Name") { SoftField(prompt: "Work mode", text: $routine.name).frame(width: 220) }
+                    CardRow(title: "Name") { SoftField(prompt: "Work mode", text: $routine.name).frame(maxWidth: 260) }
                     CardRow(title: "Say it like", last: true) {
-                        SoftField(prompt: "work mode, let's get to work", text: $routine.phrases).frame(width: 220)
+                        SoftField(prompt: "work mode, let's get to work", text: $routine.phrases).frame(maxWidth: 260)
                     }
                 }
 

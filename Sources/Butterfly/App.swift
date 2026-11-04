@@ -27,10 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var openSettings: (() -> Void)?
     private var scenes: AnyObject?   // keep the Settings scene alive
-    // Sparkle: checks the GitHub releases feed (SUFeedURL) daily, downloads, verifies and installs updates.
-    // Only inside Butterfly.app: a bare `swift build` binary has no Info.plist, and Sparkle would show an error.
-    private static let bundled = Bundle.main.bundleURL.pathExtension == "app"
-    private let updater = SPUStandardUpdaterController(startingUpdater: AppDelegate.bundled, updaterDelegate: nil, userDriverDelegate: nil)
+    private let updater = Updates.controller
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         // Apple's Settings scene (WWDC26 "Use SwiftUI with AppKit"): standard pane toolbar, title, dimmed buttons.
@@ -180,7 +177,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         let update = menu.addItem(withTitle: "Check for Updates…", action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
         update.target = updater
-        update.isHidden = !Self.bundled
+        update.isHidden = !Updates.bundled
         menu.addItem(withTitle: "Quit Butterfly", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         for i in menu.items where i.action != #selector(NSApplication.terminate(_:)) && i !== update { i.target = self }
         item.menu = menu

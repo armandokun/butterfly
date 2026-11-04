@@ -180,7 +180,7 @@ struct CardRow<Trailing: View>: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text(title).font(Design.body).tracking(-0.15).foregroundStyle(Design.ink)
+                Text(title).font(Design.body).tracking(-0.15).foregroundStyle(Design.ink).lineLimit(1).fixedSize()
                 Spacer(minLength: 12)
                 trailing()
             }
