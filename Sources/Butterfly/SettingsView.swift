@@ -262,19 +262,27 @@ private struct KeySection: View {
 
 /// Every permission Butterfly uses, with its live status and a shortcut to the right System Settings pane.
 private struct PermissionsPane: View {
-    struct Item { let title, why, pane: String; let granted: () -> Bool }
+    struct Item { let title, why, pane: String; let granted: () -> Bool; var request: (() async -> Void)? = nil }
     private static let items: [Item] = [
         Item(title: "Accessibility", why: "Hotkey, typing and clicking", pane: "Privacy_Accessibility", granted: { HotkeyMonitor.hasAccessibility }),
         Item(title: "Microphone", why: "Hearing what you say", pane: "Privacy_Microphone",
-             granted: { AVCaptureDevice.authorizationStatus(for: .audio) == .authorized }),
+             granted: { AVCaptureDevice.authorizationStatus(for: .audio) == .authorized },
+             request: { guard AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined else { return }
+                        _ = await AVCaptureDevice.requestAccess(for: .audio) }),
         Item(title: "Speech Recognition", why: "On-device transcription", pane: "Privacy_SpeechRecognition",
-             granted: { SFSpeechRecognizer.authorizationStatus() == .authorized }),
+             granted: { SFSpeechRecognizer.authorizationStatus() == .authorized },
+             request: { guard SFSpeechRecognizer.authorizationStatus() == .notDetermined else { return }
+                        await withCheckedContinuation { c in SFSpeechRecognizer.requestAuthorization { _ in c.resume() } } }),
         Item(title: "Screen Recording", why: "Screen memory and reading the screen", pane: "Privacy_ScreenCapture",
              granted: { CGPreflightScreenCaptureAccess() }),
         Item(title: "Calendars", why: "Adding events, your agenda", pane: "Privacy_Calendars",
-             granted: { EKEventStore.authorizationStatus(for: .event) == .fullAccess }),
+             granted: { EKEventStore.authorizationStatus(for: .event) == .fullAccess },
+             request: { guard EKEventStore.authorizationStatus(for: .event) == .notDetermined else { return }
+                        _ = try? await EKEventStore().requestFullAccessToEvents() }),
         Item(title: "Reminders", why: "Creating reminders", pane: "Privacy_Reminders",
-             granted: { EKEventStore.authorizationStatus(for: .reminder) == .fullAccess }),
+             granted: { EKEventStore.authorizationStatus(for: .reminder) == .fullAccess },
+             request: { guard EKEventStore.authorizationStatus(for: .reminder) == .notDetermined else { return }
+                        _ = try? await EKEventStore().requestFullAccessToReminders() }),
     ]
     @State private var status: [Bool] = []
     private let tick = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
@@ -290,7 +298,14 @@ private struct PermissionsPane: View {
                             if status.indices.contains(i), status[i] { Tag(text: "Allowed", tint: Design.green) }
                             else {
                                 Button("Allow…") {
-                                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?\(item.pane)")!)
+                                    // Ask macOS first (the only way onto Calendars/Reminders); declined, or listed with +, → System Settings.
+                                    Task { @MainActor in
+                                        await item.request?()
+                                        refresh()
+                                        if !status[i] {
+                                            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?\(item.pane)")!)
+                                        }
+                                    }
                                 }
                                 .buttonStyle(.puffy)
                             }
