@@ -21,8 +21,8 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            GlassEffectContainer(spacing: 6) {
-                HStack(spacing: 6) {
+            GlassEffectContainer(spacing: 4) {
+                HStack(spacing: 4) {
                     ForEach(Self.panes, id: \.id) { p in
                         PaneTab(title: p.title, icon: p.icon, selected: pane == p.id, ns: tabs) {
                             withAnimation(.bouncy(duration: 0.35)) { pane = p.id }
@@ -65,8 +65,9 @@ private struct PaneTab: View {
         Button(action: action) {
             Label(title, systemImage: icon)
                 .font(.system(size: 12.5, weight: .medium)).tracking(-0.1)
+                .lineLimit(1).fixedSize()
                 .foregroundStyle(selected ? .white : Design.ink.opacity(hover ? 1 : 0.8))
-                .padding(.horizontal, 14).frame(height: 32)
+                .padding(.horizontal, 11).frame(height: 32)
                 .contentShape(Capsule())
                 .glassEffect(selected ? .regular.tint(Design.ink).interactive() : .regular.interactive(), in: .capsule)
                 .glassEffectID(selected ? "selected" : title, in: ns)
@@ -232,10 +233,10 @@ private struct DeveloperPane: View {
                     CardRow(title: "Decision tree") {
                         Button("Show") { DecisionTreeWindow.shared.toggle() }.buttonStyle(.puffy)
                     }
-                    CardRow(title: "Debug logs · \(exported ?? "every command recorded")", last: true) {
+                    CardRow(title: exported.map { "Debug logs · \($0)" } ?? "Debug logs", last: true) {
                         HStack(spacing: 6) {
-                            Button("Reveal logs") { DebugRecorder.reveal() }.buttonStyle(.puffy)
-                            Button("Export debug logs") {
+                            Button("Reveal") { DebugRecorder.reveal() }.buttonStyle(.puffy)
+                            Button("Export") {
                                 if let zip = DebugRecorder.export() { exported = "saved to Desktop"; NSWorkspace.shared.activateFileViewerSelecting([zip]) } else { exported = "export failed" }
                             }
                             .buttonStyle(.puffy)
