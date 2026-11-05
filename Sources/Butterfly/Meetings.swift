@@ -351,6 +351,10 @@ final class Meetings {
 
     static func openFolder() {
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        NSWorkspace.shared.open(root)
+        // Butterfly is rarely the active app here (menu bar): ask Finder to come forward, or the window opens behind.
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        let finder = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.finder") ?? URL(fileURLWithPath: "/System/Library/CoreServices/Finder.app")
+        NSWorkspace.shared.open([root], withApplicationAt: finder, configuration: config)
     }
 }
