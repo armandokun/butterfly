@@ -221,7 +221,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.activate()
             self?.openSettings?()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                NSApp.windows.first { $0.identifier?.rawValue.contains("Settings") == true }?.makeKeyAndOrderFront(nil)
+                // activate() is cooperative since macOS 14 and can be declined for a menu-bar app; then
+                // makeKeyAndOrderFront only fronts it among Butterfly's own windows, behind the app in front.
+                if let w = NSApp.windows.first(where: { $0.identifier?.rawValue.contains("Settings") == true }) {
+                    w.orderFrontRegardless()
+                    w.makeKey()
+                }
                 NSApp.activate()
             }
         }
