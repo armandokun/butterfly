@@ -283,9 +283,25 @@ final class ScreenMemory {
             if q.contains("evening") { return (y.addingTimeInterval(17 * 3600), startToday, "yesterday evening") }
             return (y, startToday, "yesterday")
         }
+        if q.contains("this week") || q.contains("the week") {
+            let start = cal.dateInterval(of: .weekOfYear, for: now)?.start ?? startToday.addingTimeInterval(-6 * 86400)
+            return (start, now, "this week")
+        }
         if q.contains("today") || q.contains("so far") { return (startToday, now, "today") }
         return nil
     }
+
+    /// The window crosses midnight: times need a day, not just HH:mm.
+    nonisolated static func multiDay(_ from: Date, _ to: Date) -> Bool { !Calendar.current.isDate(from, inSameDayAs: to) && to.timeIntervalSince(from) > 86400 }
+
+    /// "14:27–15:02" within a day, "Mon 3 Nov – Tue 10 Nov" across days.
+    nonisolated static func range(_ from: Date, _ to: Date) -> String {
+        guard multiDay(from, to) else { return "\(clock(from))–\(clock(to))" }
+        let f = DateFormatter(); f.dateFormat = "EEE d MMM"
+        return "\(f.string(from: from)) – \(f.string(from: to))"
+    }
+
+    nonisolated static func dayClock(_ d: Date) -> String { let f = DateFormatter(); f.dateFormat = "EEE HH:mm"; return f.string(from: d) }
 
     struct Span { let from: Date; let to: Date; let app: String; let title: String; let text: String }
 

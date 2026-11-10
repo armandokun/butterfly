@@ -88,18 +88,23 @@ enum Planner {
         if let named, named != app { knownBlock += "The request is about \(named.localizedName ?? "another app"), which is not in front: start with {\"do\":\"command\",\"text\":\"open \(named.localizedName ?? "")\"} and a wait.\n" }
         var previousBlock = ""
         if let w = ScreenMemory.window(in: request) {
-            let spans = ScreenMemory.shared.timeline(from: w.from, to: w.to)
+            let multi = ScreenMemory.multiDay(w.from, w.to)
+            let spans = ScreenMemory.shared.timeline(from: w.from, to: w.to, limit: multi ? 120 : 40)
+            let stamp: (Date) -> String = multi ? ScreenMemory.dayClock : ScreenMemory.clock
             if spans.isEmpty {
-                previousBlock += "\nScreen memory has nothing for \(w.label) (\(ScreenMemory.clock(w.from))–\(ScreenMemory.clock(w.to))): the Mac was idle, locked, or memory was off. Say so in one \"say\" step.\n"
+                previousBlock += "\nScreen memory has nothing for \(w.label) (\(ScreenMemory.range(w.from, w.to))): the Mac was idle, locked, or memory was off. Say so in one \"say\" step.\n"
             } else {
-                previousBlock += "\nWhat was on screen during \(w.label) (\(ScreenMemory.clock(w.from))–\(ScreenMemory.clock(w.to))), in time order; OCR text is a noisy excerpt:\n"
+                previousBlock += "\nWhat was on screen during \(w.label) (\(ScreenMemory.range(w.from, w.to))), in time order; OCR text is a noisy excerpt:\n"
                 previousBlock += spans.map { s in
                     let secs = Int(s.to.timeIntervalSince(s.from))
                     let dur = secs < 60 ? "" : " (\(secs / 60) min)"
-                    let excerpt = s.text.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { $0.count > 3 }.joined(separator: " | ").prefix(220)
-                    return "- \(ScreenMemory.clock(s.from))–\(ScreenMemory.clock(s.to))\(dur) \(s.app)\(s.title.isEmpty ? "" : " · " + s.title.prefix(60)): \(excerpt)"
+                    let excerpt = s.text.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { $0.count > 3 }.joined(separator: " | ").prefix(multi ? 120 : 220)
+                    return "- \(stamp(s.from))–\(ScreenMemory.clock(s.to))\(dur) \(s.app)\(s.title.isEmpty ? "" : " · " + s.title.prefix(60)): \(excerpt)"
                 }.joined(separator: "\n")
-                previousBlock += "\nFor \"what did I do / what was I working on\": instead of steps, fill \"recap\": {\"title\":\"Last 5 minutes\",\"items\":[{\"time\":\"14:27\",\"app\":\"Dia\",\"text\":\"Reviewed OpenMail pull requests on GitHub\"}, …]} — 3 to 7 items in time order, merge adjacent moments in the same app into one activity, \"app\" exactly as named in the list, \"text\" ≤ 55 characters, concrete (which page, chat, file), no filler. Leave \"steps\" empty. If they ask about one specific thing in that period, answer that with a \"say\" step instead.\n"
+                previousBlock += multi
+                    ? "\nFor \"what did I do / what was I working on\": instead of steps, fill \"recap\": {\"title\":\"This week\",\"items\":[{\"time\":\"Mon\",\"app\":\"Dia\",\"text\":\"Reviewed OpenMail pull requests on GitHub\"}, …]} — 6 to 12 items in time order covering EVERY day that has activity (not just the latest day), the main projects/work per day, \"time\" is the 3-letter weekday, \"app\" exactly as named in the list, \"text\" ≤ 55 characters, concrete (which project, page, chat, file), no filler. Leave \"steps\" empty. If they ask about one specific thing in that period, answer that with a \"say\" step instead.\n"
+                    : "\nFor \"what did I do / what was I working on\": instead of steps, fill \"recap\": {\"title\":\"Last 5 minutes\",\"items\":[{\"time\":\"14:27\",\"app\":\"Dia\",\"text\":\"Reviewed OpenMail pull requests on GitHub\"}, …]} — 3 to 7 items in time order, merge adjacent moments in the same app into one activity, \"app\" exactly as named in the list, \"text\" ≤ 55 characters, concrete (which page, chat, file), no filler. Leave \"steps\" empty. If they ask about one specific thing in that period, answer that with a \"say\" step instead.\n"
+                previousBlock += "If they want it WRITTEN somewhere (\"type here\", \"write it in this chat/doc\", \"send it to …\"): no recap — one type step whose text is the summary itself (e.g. \"This week:\\n- Mon: …\\n- Tue: …\"), never the question they asked.\n"
             }
         }
         let overview = ScreenMemory.window(in: request) != nil && request.range(of: #"(?i)(what did i do|what was i doing|been doing|working on|what have i done|summar|what happened)"#, options: .regularExpression) != nil
@@ -157,6 +162,7 @@ enum Planner {
         - Prefer "command" steps; they're robust. Use open_url over clicking around a website. Add a wait after opening apps/pages.
         - To change a setting listed under "Known in …" as "Settings > <pane> > <control>", the Settings window is NOT open yet — the plan must start with {"do":"open_settings"} → wait 900 → {"do":"command","text":"click <pane>"} → wait 400 → {"do":"command","text":"click <control>"}; for pop-ups, click the pop-up, wait 300, then click the wanted choice. Finish with {"do":"keys","combo":"escape"} only for apps whose settings are a dialog inside the window (Slack, Discord).
         - The request is one unit: a sentence like "open Notes and write hello" is open Notes → wait → type.
+        - "type/write here" means the field that already has focus: just type. Never click a Send/Submit button (e.g. "Send follow-up") before typing, and don't press enter unless they said send.
         - If it's a question about what's on screen, answer with one "say" step. If it can't be done or is unclear, leave steps empty and set "clarify" to a short question or reason.
         - If a step is destructive or irreversible (deleting, sending, purchases, emptying trash, quitting with unsaved work), set "confirm" to a one-line description; the user will say yes first.
         - If the user is teaching rather than asking ("when I say X, do Y", "from now on X means Y", "remember: X is Y"), return the skill with pattern X and the steps for Y, and leave "steps" empty unless they also want it done now.
@@ -181,7 +187,7 @@ enum Planner {
         let obj = Self.json(text)
         guard !obj.isEmpty else { throw Failure(message: "The planner didn't answer") }
         var plan = try parse(obj)
-        if let w = ScreenMemory.window(in: request), plan.recap != nil { plan.recap?.range = "\(ScreenMemory.clock(w.from))–\(ScreenMemory.clock(w.to))" }
+        if let w = ScreenMemory.window(in: request), plan.recap != nil { plan.recap?.range = ScreenMemory.range(w.from, w.to) }
         return harden(plan, request: request)
     }
 
@@ -285,7 +291,7 @@ enum Planner {
                 guard let text = (i["text"] as? String)?.nilIfEmpty else { return nil }
                 return ((i["time"] as? String ?? "").trimmingCharacters(in: .whitespaces), (i["app"] as? String ?? "").trimmingCharacters(in: .whitespaces), text)
             }
-            if !list.isEmpty { plan.recap = ((r["title"] as? String)?.nilIfEmpty ?? "Recap", "", list.prefix(7).map { $0 }) }
+            if !list.isEmpty { plan.recap = ((r["title"] as? String)?.nilIfEmpty ?? "Recap", "", list.prefix(12).map { $0 }) }
         }
         return plan
     }
