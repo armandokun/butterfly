@@ -137,11 +137,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The status menu is still tracking when this runs: open on the next turn.
         DispatchQueue.main.async { [weak self] in
             NSApp.setActivationPolicy(.regular)
-            NSApp.activate()
             self?.openSettings?()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                NSApp.windows.first { $0.identifier?.rawValue.contains("Settings") == true }?.makeKeyAndOrderFront(nil)
-                NSApp.activate()
+            // A menu-bar app isn't the active app, and plain `activate()` is only a request macOS may ignore.
+            // Force it, and keep pulling the window forward until SwiftUI has made it.
+            for delay in [0.0, 0.1, 0.25, 0.5] {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                    NSApp.activate(ignoringOtherApps: true)
+                    guard let w = NSApp.windows.first(where: { $0.identifier?.rawValue.contains("Settings") == true || $0.title.contains("Settings") }) else { return }
+                    w.orderFrontRegardless()
+                    w.makeKeyAndOrderFront(nil)
+                }
             }
         }
     }
