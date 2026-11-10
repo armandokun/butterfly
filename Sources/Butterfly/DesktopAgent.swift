@@ -6,7 +6,7 @@ import Foundation
 /// and screen memory ("what did I do this week").
 @MainActor
 enum DesktopAgent {
-    static let model = "gemini-3.8-flash"
+    static let model = ProcessInfo.processInfo.environment["BUTTERFLY_MODEL"] ?? "gemini-3.8-flash"
     static let maxTurns = 30
 
     struct Recap {
@@ -216,7 +216,12 @@ enum DesktopAgent {
                 "toolConfig": ["functionCallingConfig": ["mode": "ANY"]],
                 "generationConfig": ["temperature": 0.2, "thinkingConfig": ["thinkingBudget": 0]],
             ]
+            let t0 = Date()
             let d = try await MeetingTranscriber.request("POST", "/v1beta/models/\(model):generateContent", key: key, json: body, timeout: 45)
+            if let u = d["usageMetadata"] as? [String: Any] {
+                log(String(format: "gemini %.1fs · in %@ (cached %@) · out %@", Date().timeIntervalSince(t0),
+                           "\(u["promptTokenCount"] ?? "?")", "\(u["cachedContentTokenCount"] ?? 0)", "\(u["candidatesTokenCount"] ?? "?")"))
+            }
             try Task.checkCancellation()
             guard let content = (d["candidates"] as? [[String: Any]])?.first?["content"] as? [String: Any],
                   let parts = content["parts"] as? [[String: Any]] else { throw Failure(message: "Gemini didn't answer") }
