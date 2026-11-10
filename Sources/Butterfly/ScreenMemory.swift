@@ -83,7 +83,8 @@ final class ScreenMemory {
         guard let shot else { NSLog("ScreenMemory: no window for %@", name); return }
         // What you type stays yours: text fields, composers and password boxes are painted over before OCR and storage.
         let fields = await ScreenReader.inputFrames(pid: app.processIdentifier)
-        let image = ScreenReader.mask(shot.image, window: shot.frame, fields: fields)
+        let image = await ScreenReader.maskEchoes(ScreenReader.mask(shot.image, window: shot.frame, fields: fields),
+                                                  of: fields.compactMap(\.value), scale: CGFloat(shot.image.height) / shot.frame.height)
         if !fields.isEmpty { log("masked \(fields.count) inputs") }
         if debug, let d = Self.jpeg(image, maxSide: 1400, quality: 0.6) { try? d.write(to: URL(fileURLWithPath: "/tmp/butterfly-last-frame.jpg")) }
         // Cheap change detection: a 16×16 grey thumbnail; only OCR when the window really changed.
