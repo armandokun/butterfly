@@ -176,6 +176,8 @@ enum DesktopAgent {
         - Several actions on refs from one snapshot (keypad presses, form fields) go in ONE call: \
         `["batch","[{\\"command\\":\\"click\\",\\"args\\":{\\"ref_id\\":\\"@s…:e4\\"}},…]","--stop-on-error"]` — \
         the JSON array is a single argument, entries use `args`, not stdin.
+        - `launch`, `batch`, `click`, `type`, `press` results include a fresh snapshot of the app: act on its refs \
+        or `finish` from it directly, don't snapshot again. Batch every click you can plan in one go.
         - "Here" / "this" means the front app and the field that has focus. For "type/write here …" use `type_text` directly.
         - If a snapshot comes back empty or fails for a browser/Electron app, use `look` to see it and `type_text`, \
         `desktop press …`, or `open_url` instead.
@@ -201,7 +203,7 @@ enum DesktopAgent {
         var recapRange = ""
         // A session with the visible agent cursor, started on the first desktop action: web answers and
         // memory questions never show a cursor.
-        var session: String?, sessionTried = false
+        var session: String?, sessionTried = false, lastApp: String?
         // Apps running before we start: anything new was launched by the agent.
         let before = Set(NSWorkspace.shared.runningApplications.map(\.processIdentifier))
         defer { if let id = session { Task.detached { _ = await cli(["session", "end", id]) } } }
@@ -212,7 +214,7 @@ enum DesktopAgent {
                 "contents": contents,
                 "tools": tools,
                 "toolConfig": ["functionCallingConfig": ["mode": "ANY"]],
-                "generationConfig": ["temperature": 0.2, "thinkingConfig": ["thinkingBudget": 512]],
+                "generationConfig": ["temperature": 0.2, "thinkingConfig": ["thinkingBudget": 0]],
             ]
             let d = try await MeetingTranscriber.request("POST", "/v1beta/models/\(model):generateContent", key: key, json: body, timeout: 45)
             try Task.checkCancellation()
@@ -251,6 +253,14 @@ enum DesktopAgent {
                     if !sessionTried { sessionTried = true; session = await startSession() }
                     result = ScreenReader.redact(await cli(a, stdin: args["stdin"] as? String, session: session))
                     if a.first == "launch" { bringForward(a) }
+                    if let name = appName(a) { lastApp = name }
+                    // Launches and actions come back with a fresh snapshot: one model turn instead of two.
+                    let acts: Set<String> = ["launch", "batch", "click", "type", "press", "set-value", "select", "scroll"]
+                    if let cmd = a.first, acts.contains(cmd), let app = lastApp, result.contains("\"ok\":true") {
+                        if cmd == "launch" { try? await Task.sleep(for: .milliseconds(300)) }
+                        let snap = ScreenReader.redact(await cli(["snapshot", "--app", app, "-i", "--compact"], session: session))
+                        result += "\n\nSnapshot after it:\n" + snap
+                    }
                 case "type_text":
                     let text = args["text"] as? String ?? ""
                     progress("Typing…")
@@ -330,7 +340,7 @@ enum DesktopAgent {
         guard let o = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any],
               let id = (o["data"] as? [String: Any])?["session_id"] as? String else { log("no session: \(raw.prefix(200))"); return nil }
         // Butterfly style: violet→pink arrow, pink ripple and highlight, a short pause on each target so the click is visible.
-        var overlay = ["cursor-overlay", "enable", "--accent", "#FF6BAD", "--dwell-ms", "220", "--travel-ms", "120,400", "--bow", "1.4"]
+        var overlay = ["cursor-overlay", "enable", "--accent", "#FF6BAD", "--dwell-ms", "60", "--travel-ms", "70,200", "--bow", "1.2"]
         if let art = cursorArt() { overlay += ["--image", art.path, "--hotspot", "4,3", "--size", "1.2"] } else { overlay += ["--fill", "#8C78F7", "--rim", "#FFFFFF", "--size", "1.4"] }
         log("overlay: " + (await cli(overlay, session: id, timeout: 10)).prefix(300))
         return id
@@ -371,6 +381,12 @@ enum DesktopAgent {
     }
 
     /// Actions are headless (no focus change): bring the app being worked on to the front so you can watch it.
+    private static func appName(_ a: [String]) -> String? {
+        if a.first == "launch", a.count > 1 { return a[1] }
+        if let i = a.firstIndex(of: "--app"), i + 1 < a.count { return a[i + 1] }
+        return nil
+    }
+
     private static func bringForward(_ a: [String]) {
         var name: String?
         if a.first == "launch", a.count > 1 { name = a[1] }
