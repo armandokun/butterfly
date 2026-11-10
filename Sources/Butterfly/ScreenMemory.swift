@@ -36,7 +36,7 @@ final class ScreenMemory {
     private var recent: [Entry] = []      // today + the last days, in memory for search
     private var loadedDays: Set<String> = []
     private(set) var count = 0
-    var debug = false
+    var debug = ProcessInfo.processInfo.environment["BUTTERFLY_MEMORY_DEBUG"] != nil
     private func log(_ s: String) { if debug { print("  memory:", s) } }
 
     /// Apps whose windows are never read. Yours to edit in Settings; these are the defaults (password managers, banks, private chats).
@@ -78,9 +78,14 @@ final class ScreenMemory {
         let title = ScreenReader.windowTitle(app)
         if Self.skipTitles.contains(where: { title.lowercased().contains($0) }) { log("skip: private"); return }
         busy = true; defer { busy = false }
-        var image: CGImage?
-        do { image = try await ScreenReader.windowImage(app) } catch { NSLog("ScreenMemory: capture failed: %@", "\(error)"); return }
-        guard let image else { NSLog("ScreenMemory: no window for %@", name); return }
+        var shot: (image: CGImage, frame: CGRect)?
+        do { shot = try await ScreenReader.windowCapture(app) } catch { NSLog("ScreenMemory: capture failed: %@", "\(error)"); return }
+        guard let shot else { NSLog("ScreenMemory: no window for %@", name); return }
+        // What you type stays yours: text fields, composers and password boxes are painted over before OCR and storage.
+        let fields = await ScreenReader.inputFrames(pid: app.processIdentifier)
+        let image = ScreenReader.mask(shot.image, window: shot.frame, fields: fields)
+        if !fields.isEmpty { log("masked \(fields.count) inputs") }
+        if debug, let d = Self.jpeg(image, maxSide: 1400, quality: 0.6) { try? d.write(to: URL(fileURLWithPath: "/tmp/butterfly-last-frame.jpg")) }
         // Cheap change detection: a 16×16 grey thumbnail; only OCR when the window really changed.
         let h = Self.thumbHash(image)
         if Self.distance(h, lastHash) < 10 { log("same frame (\(name))"); return }
