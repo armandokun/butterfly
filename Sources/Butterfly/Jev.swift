@@ -31,7 +31,10 @@ enum Jev {
         case "open_app":
             guard let c = a["app"], c.confidence >= 0.8, c.choice != "none", let i = Int(c.choice.dropFirst()), i < apps.count else { return .agent }
             return .openApp(apps[i])
-        case "math": return .math
+        case "math":
+            // "press 12 × 9 here", "in Calculator…": that's doing it in an app.
+            let doIt = transcript.range(of: #"\b(here|this|press|type|click|enter|in [A-Z]\w+)\b"#, options: .regularExpression) != nil
+            return doIt || (a["app"].map { $0.choice != "none" && $0.confidence >= 0.5 } ?? false) ? .agent : .math
         case "web": return .web
         case "memory": return .memory
         default: return .agent
@@ -66,6 +69,8 @@ enum Arithmetic {
         // The expression is the run of numbers and operators; words around it ("what's", "?") are dropped.
         guard let m = s.range(of: #"-?\d+(\.\d+)?(\s*[-+*/]\s*-?\d+(\.\d+)?)+"#, options: .regularExpression) else { return nil }
         let expr = String(s[m])
+        // Every number said must be in the expression, or we'd answer a different sum.
+        guard s[..<m.lowerBound].allSatisfy({ !$0.isNumber }), s[m.upperBound...].allSatisfy({ !$0.isNumber }) else { return nil }
         guard let v = eval(expr), v.isFinite else { return nil }
         let pretty = expr.replacingOccurrences(of: "*", with: "×").replacingOccurrences(of: "/", with: "÷")
             .replacingOccurrences(of: #"\s*([-+×÷])\s*"#, with: " $1 ", options: .regularExpression)

@@ -335,7 +335,7 @@ final class NotchModel: ObservableObject {
         DesktopAgent.warm(frontApp)
         // As if spoken: the request arrives after you've talked for a bit (BUTTERFLY_SAY_DELAY seconds).
         let delay = Double(ProcessInfo.processInfo.environment["BUTTERFLY_SAY_DELAY"] ?? "") ?? 0
-        Task { try? await Task.sleep(for: .seconds(delay)); await handle(text) }
+        requestTask = Task { try? await Task.sleep(for: .seconds(delay)); await handle(text) }
     }
 
     private func handle(_ text: String) async {
