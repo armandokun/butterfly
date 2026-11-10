@@ -75,7 +75,7 @@ final class ScreenMemory {
            CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .keyDown) > 90 { log("skip: idle"); return }
         guard let app = NSWorkspace.shared.frontmostApplication, let name = app.localizedName, !Self.isExcluded(name),
               app.bundleIdentifier != Bundle.main.bundleIdentifier else { log("skip: app"); return }
-        let title = Planner.windowTitle(app)
+        let title = ScreenReader.windowTitle(app)
         if Self.skipTitles.contains(where: { title.lowercased().contains($0) }) { log("skip: private"); return }
         busy = true; defer { busy = false }
         var image: CGImage?
@@ -86,7 +86,7 @@ final class ScreenMemory {
         if Self.distance(h, lastHash) < 10 { log("same frame (\(name))"); return }
         lastHash = h
         guard let text = try? await ScreenReader.text(in: image), text.count >= 20 else { return }
-        let tokens = Set(AppMap.tokens(text))
+        let tokens = Set(ScreenMemory.tokens(text))
         // Same content as the last entry (scrolled a little, cursor moved): extend it instead of storing again.
         if !lastTokens.isEmpty, Self.jaccard(tokens, lastTokens) > 0.85, var last = recent.last, last.app == name {
             last.until = Date()
@@ -218,10 +218,10 @@ final class ScreenMemory {
 
     /// Snippets from what was on screen that match the question, newest first among the best.
     func search(_ question: String, limit: Int = 6) -> [Hit] {
-        var words = Set(AppMap.tokens(question)).subtracting(AppMap.stop)
+        var words = Set(ScreenMemory.tokens(question)).subtracting(ScreenMemory.stop)
             .subtracting(["what", "was", "were", "did", "see", "saw", "seen", "earlier", "before", "remember", "yesterday", "today", "price", "show", "showed", "page", "screen", "looking", "looked", "when", "where", "which", "how", "much", "many", "about", "there", "that", "find", "tell",
                           "last", "past", "minute", "minutes", "hour", "hours", "ago", "five", "ten", "few", "couple", "morning", "afternoon", "doing", "done", "work", "working"])
-        if words.isEmpty { words = Set(AppMap.tokens(question)) }
+        if words.isEmpty { words = Set(ScreenMemory.tokens(question)) }
         guard !words.isEmpty else { return [] }
         var hits: [Hit] = []
         for e in recent.reversed() {
@@ -321,6 +321,11 @@ final class ScreenMemory {
         let keep = Set(spans.enumerated().sorted { $0.element.to.timeIntervalSince($0.element.from) > $1.element.to.timeIntervalSince($1.element.from) }.prefix(limit).map(\.offset))
         return spans.enumerated().filter { keep.contains($0.offset) }.map(\.element)
     }
+
+    nonisolated static func tokens(_ s: String) -> [String] {
+        s.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init).filter { $0.count > 1 }
+    }
+    nonisolated static let stop: Set<String> = ["the", "and", "to", "in", "on", "of", "for", "me", "my", "it", "this", "that", "from", "can", "you", "please", "with", "an", "is", "at", "up", "do", "i"]
 
     nonisolated static func clock(_ d: Date) -> String { let f = DateFormatter(); f.dateFormat = "HH:mm"; return f.string(from: d) }
 

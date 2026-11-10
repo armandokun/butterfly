@@ -37,7 +37,7 @@ enum Ducker {
 
     static func duck() {
         guard enabled, original == nil, NowPlaying.shared.track?.playing == true else { return }
-        let v = SystemController.Audio.volume
+        let v = SystemAudio.volume
         guard v > 8 else { return }
         let target = max(4, v * 35 / 100)
         original = v
@@ -49,7 +49,7 @@ enum Ducker {
         guard let o = original, let l = lowered else { return }
         original = nil; lowered = nil
         // Volume changed while listening ("volume up", keys): keep what you chose.
-        guard fade != nil || SystemController.Audio.volume == l else { return }
+        guard fade != nil || SystemAudio.volume == l else { return }
         ramp(from: l, to: o)
     }
 
@@ -66,5 +66,5 @@ enum Ducker {
         }
     }
 
-    private static func osaVolume(_ v: Int) -> Int { SystemController.Audio.setVolume(v) }
+    private static func osaVolume(_ v: Int) -> Int { SystemAudio.setVolume(v) }
 }

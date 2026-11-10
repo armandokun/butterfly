@@ -8,7 +8,6 @@ import SwiftUI
 /// Butterfly → Settings… (⌘,). Laid out like System Settings: a grouped sidebar on the left, one page on the right.
 /// Each page holds only the controls that belong together; the last page is restored.
 struct SettingsView: View {
-    var run: (Routine) -> Void
     @AppStorage("settingsPane") private var pane = "general"
 
     struct Page: Identifiable { let id, title, icon: String; let tint: Color }
@@ -16,13 +15,12 @@ struct SettingsView: View {
         [Page(id: "general", title: "General", icon: "gearshape.fill", tint: Design.slate),
          Page(id: "listening", title: "Listening", icon: "waveform", tint: Design.pink),
          Page(id: "vocabulary", title: "Vocabulary", icon: "character.book.closed.fill", tint: Design.orange)],
-        [Page(id: "routines", title: "Routines", icon: "bolt.fill", tint: Design.violet),
-         Page(id: "skills", title: "Learned Skills", icon: "brain.fill", tint: Design.green)],
+        [Page(id: "agent", title: "Desktop Agent", icon: "sparkles", tint: Design.violet)],
         [Page(id: "meetings", title: "Meetings", icon: "video.fill", tint: Design.sky),
          Page(id: "screen", title: "Screen Memory", icon: "eye.fill", tint: Design.slate)],
         [Page(id: "keys", title: "API Keys", icon: "key.fill", tint: Design.orange),
          Page(id: "permissions", title: "Permissions", icon: "hand.raised.fill", tint: Design.sky)],
-        [Page(id: "developer", title: "Developer", icon: "hammer.fill", tint: Design.ink)],
+        [Page(id: "developer", title: "Diagnostics", icon: "hammer.fill", tint: Design.ink)],
     ]
     private var current: Page { Self.groups.joined().first { $0.id == pane } ?? Self.groups[0][0] }
 
@@ -33,8 +31,7 @@ struct SettingsView: View {
                 switch current.id {
                 case "listening": ScrollView { ListeningPane() }
                 case "vocabulary": VocabularyPane()
-                case "routines": RoutinesPane(store: .shared, run: run)
-                case "skills": SkillsPane(store: .shared)
+                case "agent": ScrollView { AgentPane() }
                 case "meetings": ScrollView { MeetingsPane() }
                 case "screen": ScreenMemoryPane()
                 case "keys": ScrollView { KeysPane() }
@@ -215,9 +212,7 @@ private struct MeetingsPane: View {
 private struct KeysPane: View {
     var body: some View {
         PageBody {
-            KeySection(title: "TypeSafe", footer: "Required for voice commands. Get one at typesafe.ai.", prompt: "apikey_…",
-                       saved: Keychain.apiKey != nil, save: Keychain.save)
-            KeySection(title: "Gemini", footer: "For meeting transcripts and reading your screen. Get one at aistudio.google.com.", prompt: "AIza…",
+            KeySection(title: "Gemini", footer: "Runs voice commands and writes meeting transcripts. Get one at aistudio.google.com.", prompt: "AIza…",
                        saved: Keychain.geminiKey != nil, save: Keychain.saveGemini)
             Text("Keys are stored in your Keychain and never leave this Mac except to call their service.").secondaryText().padding(.horizontal, 4)
         }
@@ -253,7 +248,7 @@ private struct KeySection: View {
 private struct PermissionsPane: View {
     struct Item { let title, why, pane: String; let granted: () -> Bool; var request: (() async -> Void)? = nil }
     private static let items: [Item] = [
-        Item(title: "Accessibility", why: "Hotkey, typing and clicking", pane: "Privacy_Accessibility", granted: { HotkeyMonitor.hasAccessibility }),
+        Item(title: "Accessibility", why: "Hotkey, typing, operating apps", pane: "Privacy_Accessibility", granted: { HotkeyMonitor.hasAccessibility }),
         Item(title: "Microphone", why: "Hearing what you say", pane: "Privacy_Microphone",
              granted: { AVCaptureDevice.authorizationStatus(for: .audio) == .authorized },
              request: { guard AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined else { return }
@@ -264,14 +259,10 @@ private struct PermissionsPane: View {
                         await withCheckedContinuation { c in SFSpeechRecognizer.requestAuthorization { _ in c.resume() } } }),
         Item(title: "Screen Recording", why: "Screen memory and reading the screen", pane: "Privacy_ScreenCapture",
              granted: { CGPreflightScreenCaptureAccess() }),
-        Item(title: "Calendars", why: "Adding events, your agenda", pane: "Privacy_Calendars",
+        Item(title: "Calendars", why: "Naming meeting recordings", pane: "Privacy_Calendars",
              granted: { EKEventStore.authorizationStatus(for: .event) == .fullAccess },
              request: { guard EKEventStore.authorizationStatus(for: .event) == .notDetermined else { return }
                         _ = try? await EKEventStore().requestFullAccessToEvents() }),
-        Item(title: "Reminders", why: "Creating reminders", pane: "Privacy_Reminders",
-             granted: { EKEventStore.authorizationStatus(for: .reminder) == .fullAccess },
-             request: { guard EKEventStore.authorizationStatus(for: .reminder) == .notDetermined else { return }
-                        _ = try? await EKEventStore().requestFullAccessToReminders() }),
     ]
     @State private var status: [Bool] = []
     private let tick = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
@@ -313,31 +304,10 @@ private struct PermissionsPane: View {
 // MARK: - Developer
 
 private struct DeveloperPane: View {
-    @AppStorage("developerMode") private var developer = false
-    @State private var exported: String?
     @State private var appCount = AppCatalog.shared.apps.count
 
     var body: some View {
         PageBody {
-            CardSection(title: "Developer mode", footer: "Saves a trace, screenshots and a video of each command.") {
-                CardRow(title: "Record every command", last: !developer) {
-                    InkToggle(isOn: $developer)
-                }
-                if developer {
-                    CardRow(title: "Decision tree") {
-                        Button("Show") { DecisionTreeWindow.shared.toggle() }.buttonStyle(.puffy)
-                    }
-                    CardRow(title: exported.map { "Debug logs · \($0)" } ?? "Debug logs", last: true) {
-                        HStack(spacing: 6) {
-                            Button("Reveal") { DebugRecorder.reveal() }.buttonStyle(.puffy)
-                            Button("Export") {
-                                if let zip = DebugRecorder.export() { exported = "saved to Desktop"; NSWorkspace.shared.activateFileViewerSelecting([zip]) } else { exported = "export failed" }
-                            }
-                            .buttonStyle(.puffy)
-                        }
-                    }
-                }
-            }
             CardSection(title: "Diagnostics", footer: "Crash reports are written when Butterfly crashes or is killed. Attach them to bug reports.") {
                 CardRow(title: "Crash reports") {
                     Button("Reveal") { NSWorkspace.shared.open(CrashReporter.dir.deletingLastPathComponent()) }.buttonStyle(.puffy)
@@ -350,7 +320,7 @@ private struct DeveloperPane: View {
     }
 }
 
-// MARK: - Vocabulary, Routines, Learned Skills, Screen Memory
+// MARK: - Vocabulary, Agent, Screen Memory
 
 private struct VocabularyPane: View {
     struct Word: Identifiable, Equatable { var id = UUID(); var text: String }
@@ -395,113 +365,28 @@ private struct VocabularyPane: View {
     }
 }
 
-/// Routine list on the left (numbered tiles) in a light gray frame, editor on the right.
-private struct RoutinesPane: View {
-    @ObservedObject var store: RoutineStore
-    var run: (Routine) -> Void
-    @State private var selection: Routine.ID?
-    private let tints = [Design.violet, Design.green, Design.orange, Design.sky, Design.pink]
-
+/// agent-desktop (vercel-labs): the hands for voice commands.
+private struct AgentPane: View {
+    @State private var status = "Checking…"
+    @State private var ok = false
     var body: some View {
-        HStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Routines").titleText(22).padding(.leading, 6)
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(Array(store.routines.enumerated()), id: \.element.id) { i, r in
-                            Button { selection = r.id } label: {
-                                HStack(spacing: 6) {
-                                    Text("\(i + 1)").font(Design.label).foregroundStyle(.white).frame(width: 22, height: 22)
-                                        .background(tints[i % tints.count], in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                                    Text(r.name.isEmpty ? "Untitled" : r.name).font(Design.body)
-                                    Spacer()
-                                }
-                                .foregroundStyle(Design.ink)
-                                .padding(6)
-                                .contentShape(.rect(cornerRadius: 12))
-                                .glassEffect(selection == r.id ? .regular.tint(.white.opacity(0.6)).interactive() : .identity, in: .rect(cornerRadius: 12))
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
+        PageBody {
+            CardSection(title: "agent-desktop", footer: "Voice commands are carried out by a Gemini agent that operates your apps through agent-desktop (accessibility tree). Install: npm i -g agent-desktop") {
+                CardRow(title: status) {
+                    if ok { Tag(text: "Ready", tint: Design.green) }
+                    else { Button("Copy install command") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString("npm i -g agent-desktop", forType: .string) }.buttonStyle(.puffy) }
                 }
-                GlassEffectContainer(spacing: 4) {
-                HStack(spacing: 4) {
-                    Button { add() } label: { Image(systemName: "plus") }.buttonStyle(.puffy).help("New routine")
-                    Button(role: .destructive) { remove() } label: { Image(systemName: "minus") }.buttonStyle(.puffy).disabled(selection == nil).help("Delete routine")
+                CardRow(title: "Agent log", last: true) {
+                    Button("Reveal") { NSWorkspace.shared.activateFileViewerSelecting([FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("Logs/Butterfly/agent.log")]) }.buttonStyle(.puffy)
                 }
-                }
-            }
-            .padding(12)
-            .frame(width: 160)
-            .softCard(radius: Design.radius)
-            .padding([.leading, .vertical], 20)
-
-            if let i = store.routines.firstIndex(where: { $0.id == selection }) {
-                RoutineEditor(routine: $store.routines[i], run: run).id(store.routines[i].id)
-            } else {
-                VStack(spacing: 10) {
-                    Text("No routine yet").displayText(24)
-                    Text("One phrase runs several commands, like “work mode”.").secondaryText(.system(size: 14))
-                    Button { add() } label: { Label("New routine", systemImage: "plus") }.buttonStyle(.puffyInk)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .frame(maxHeight: .infinity)
-        .onAppear { if selection == nil { selection = store.routines.first?.id } }
-    }
-
-    private func add() {
-        let r = Routine()
-        store.routines.append(r)
-        selection = r.id
-    }
-
-    private func remove() {
-        guard let i = store.routines.firstIndex(where: { $0.id == selection }) else { return }
-        store.routines.remove(at: i)
-        selection = store.routines.indices.contains(i) ? store.routines[i].id : store.routines.last?.id
-    }
-}
-
-/// What Butterfly learned by doing: one row per skill, forget any of them.
-private struct SkillsPane: View {
-    @ObservedObject var store: SkillStore
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Design.section) {
-                if store.skills.isEmpty {
-                    Text("Nothing yet. The first time a request needs working out, the finished plan is kept here and runs instantly next time.")
-                        .secondaryText(.system(size: 14))
-                } else {
-                    CardSection(title: "\(store.skills.count) skills", footer: "Patterns with {slots} match what you say; the steps run without any model call.") {
-                        ForEach(store.skills.sorted { $0.lastUsed > $1.lastUsed }) { s in
-                            VStack(spacing: 0) {
-                                HStack(alignment: .top, spacing: 10) {
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(s.name).font(Design.body.weight(.medium)).foregroundStyle(Design.ink)
-                                        Text("“\(s.pattern)”").font(Design.body).foregroundStyle(Design.ink.opacity(0.8))
-                                        Text(s.steps.map(Planner.describe).joined(separator: " → ")).font(Design.label).foregroundStyle(Design.secondary).lineLimit(2)
-                                        Text("\(s.uses) \(s.uses == 1 ? "use" : "uses") · last \(s.lastUsed.formatted(.relative(presentation: .named)))").font(Design.label).foregroundStyle(Design.secondary)
-                                    }
-                                    Spacer()
-                                    Button("Forget", role: .destructive) { store.forget(s) }.buttonStyle(.puffy)
-                                }
-                                .padding(.horizontal, Design.pad).padding(.vertical, 12)
-                                Rectangle().fill(Design.hairline).frame(height: 1)
-                            }
-                        }
-                        HStack {
-                            Spacer()
-                            Button("Forget all", role: .destructive) { store.forgetAll() }.buttonStyle(.puffy)
-                        }
-                        .padding(.horizontal, Design.pad).padding(.vertical, 12)
-                    }
-                }
-            }
-            .padding(.horizontal, 24).padding(.vertical, 20)
+        .task {
+            guard let bin = DesktopAgent.binary else { status = "Not installed"; return }
+            let v = await DesktopAgent.cli(["version"])
+            let ver = (try? JSONSerialization.jsonObject(with: Data(v.utf8)) as? [String: Any]).flatMap { ($0["data"] as? [String: Any])?["version"] as? String }
+            ok = ver != nil
+            status = ver.map { "Version \($0) · \((bin as NSString).abbreviatingWithTildeInPath)" } ?? "Installed but not responding"
         }
     }
 }

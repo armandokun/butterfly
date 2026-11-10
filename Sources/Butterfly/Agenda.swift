@@ -1,18 +1,10 @@
 import AppKit
 import EventKit
 
-/// "What's next on my calendar", "what's on today", "join my meeting", plus a heads-up 5 minutes before.
+/// Calendar events: Meetings uses them to name recordings and tell a call from a stray mic.
 @MainActor
 final class Agenda {
     static let shared = Agenda()
-    enum Action: String { case next = "calendar_next", today = "calendar_today", tomorrow = "calendar_tomorrow", join = "calendar_join" }
-
-    static let actionQuestion = TypeSafeClient.Question.choice("What does the user want from their calendar?", options: [
-        "calendar_next": "the next meeting or event: what's next, when is my next meeting, am I free",
-        "calendar_today": "everything on today's calendar, how many meetings today, what's my day like",
-        "calendar_tomorrow": "what's on the calendar tomorrow",
-        "calendar_join": "join, open, or start the current or next meeting / video call (Zoom, Google Meet, Teams, FaceTime)",
-    ])
 
     /// Heads-up: (event, minutes until start).
     var onSoon: ((EKEvent, Int) -> Void)?

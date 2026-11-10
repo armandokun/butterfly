@@ -39,7 +39,7 @@ enum Vocabulary {
     /// Vocabulary entries whose letters appear in the transcript, ignoring spaces/dots.
     /// "open mail dot sh" → letters "openmailsh" contains "openmailsh" → "openmail.sh".
     static func matches(in transcript: String) -> [String] {
-        let spoken = compact(URLExtractor.normalize(transcript))
+        let spoken = compact(transcript.replacingOccurrences(of: " dot ", with: "."))
         return words.filter { spoken.contains(compact($0)) }
     }
 
