@@ -280,7 +280,7 @@ enum DesktopAgent {
     /// The agent cursor PNG (drawn once into Application Support): Design.violet → Design.pink, white rim, pink glow.
     private static func cursorArt() -> URL? {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Butterfly")
-        let url = dir.appendingPathComponent("agent-cursor-v1.png")
+        let url = dir.appendingPathComponent("agent-cursor-v2.png")
         if FileManager.default.fileExists(atPath: url.path) { return url }
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let pt = NSSize(width: 28, height: 32), scale: CGFloat = 2
@@ -291,8 +291,8 @@ enum DesktopAgent {
         let ctx = gc.cgContext
         ctx.translateBy(x: 0, y: pt.height * scale); ctx.scaleBy(x: scale, y: -scale)   // top-left origin, in points
         let p = CGMutablePath()
-        p.addLines(between: [CGPoint(x: 4, y: 3), CGPoint(x: 4, y: 24), CGPoint(x: 9.5, y: 19), CGPoint(x: 13.5, y: 28),
-                             CGPoint(x: 17, y: 26.5), CGPoint(x: 13, y: 17.5), CGPoint(x: 20.5, y: 17.5)])
+        // Arrowhead only, no stem: tip, left edge, inner notch, right wing.
+        p.addLines(between: [CGPoint(x: 4, y: 3), CGPoint(x: 4, y: 22), CGPoint(x: 9.5, y: 16.5), CGPoint(x: 18.5, y: 16.5)])
         p.closeSubpath()
         let violet = CGColor(red: 0.55, green: 0.47, blue: 0.97, alpha: 1), pink = CGColor(red: 1, green: 0.42, blue: 0.68, alpha: 1)
         ctx.saveGState()
@@ -302,7 +302,7 @@ enum DesktopAgent {
         ctx.saveGState()
         ctx.addPath(p); ctx.clip()
         if let g = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: [violet, pink] as CFArray, locations: [0, 1]) {
-            ctx.drawLinearGradient(g, start: CGPoint(x: 4, y: 3), end: CGPoint(x: 17, y: 28), options: [])
+            ctx.drawLinearGradient(g, start: CGPoint(x: 4, y: 3), end: CGPoint(x: 15, y: 20), options: [])
         }
         ctx.restoreGState()
         ctx.addPath(p); ctx.setStrokeColor(.white); ctx.setLineWidth(1.6); ctx.setLineJoin(.round); ctx.strokePath()
