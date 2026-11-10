@@ -31,11 +31,12 @@ enum DesktopAgent {
     }()
 
     /// Runs `agent-desktop <args>`; returns its JSON envelope (stdout, else stderr). Killed on cancel or after `timeout`.
-    nonisolated static func cli(_ args: [String], stdin: String? = nil, timeout: TimeInterval = 25) async -> String {
+    nonisolated static func cli(_ args: [String], stdin: String? = nil, session: String? = nil, timeout: TimeInterval = 25) async -> String {
         guard let bin = await binary else { return #"{"ok":false,"error":{"message":"agent-desktop is not installed"}}"# }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: bin)
         p.arguments = args
+        if let session { p.environment = ProcessInfo.processInfo.environment.merging(["AGENT_DESKTOP_SESSION": session]) { $1 } }
         let out = Pipe(), err = Pipe(), inp = Pipe()
         p.standardOutput = out; p.standardError = err; p.standardInput = inp
         do { try p.run() } catch { return #"{"ok":false,"error":{"message":"could not start agent-desktop"}}"# }
@@ -150,6 +151,9 @@ enum DesktopAgent {
         """
         var contents: [[String: Any]] = [["role": "user", "parts": [["text": "The user said: “\(request)”"]]]]
         var recapRange = ""
+        // A session with the visible agent cursor: you see where it points and what it clicks.
+        let session = await startSession()
+        defer { if let session { Task.detached { _ = await cli(["session", "end", session]) } } }
         for _ in 0..<maxTurns {
             try Task.checkCancellation()
             let body: [String: Any] = [
@@ -190,7 +194,9 @@ enum DesktopAgent {
                     if a.first == "agent-desktop" { a.removeFirst() }
                     a.removeAll { $0 == "--force" }
                     progress(describe(a))
-                    result = await cli(a, stdin: args["stdin"] as? String)
+                    bringForward(a)
+                    result = await cli(a, stdin: args["stdin"] as? String, session: session)
+                    if a.first == "launch" { bringForward(a) }
                 case "type_text":
                     let text = args["text"] as? String ?? ""
                     progress("Typing…")
@@ -258,6 +264,28 @@ enum DesktopAgent {
     }
 
     // MARK: Helpers
+
+    /// `session start --cursor --no-trace` → its id; nil if it can't start (the agent still works, just unseen).
+    private static func startSession() async -> String? {
+        let raw = await cli(["session", "start", "--cursor", "--no-trace", "--name", "butterfly"], timeout: 10)
+        guard let o = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any],
+              let id = (o["data"] as? [String: Any])?["session_id"] as? String else { log("no session: \(raw.prefix(200))"); return nil }
+        // A bit bigger, and a short pause on each target so the click is visible.
+        _ = await cli(["cursor-overlay", "enable", "--size", "1.4", "--dwell-ms", "220", "--travel-ms", "120,400"], session: id, timeout: 10)
+        return id
+    }
+
+    /// Actions are headless (no focus change): bring the app being worked on to the front so you can watch it.
+    private static func bringForward(_ a: [String]) {
+        var name: String?
+        if a.first == "launch", a.count > 1 { name = a[1] }
+        if let i = a.firstIndex(of: "--app"), i + 1 < a.count { name = a[i + 1] }
+        guard let name else { return }
+        let app = NSWorkspace.shared.runningApplications.first {
+            $0.localizedName?.caseInsensitiveCompare(name) == .orderedSame || $0.bundleIdentifier == name
+        }
+        if let app, !app.isActive { app.activate() }
+    }
 
     private static func describe(_ a: [String]) -> String {
         guard let cmd = a.first else { return "Working…" }
