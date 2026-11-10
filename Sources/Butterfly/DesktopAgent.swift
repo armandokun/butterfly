@@ -270,9 +270,45 @@ enum DesktopAgent {
         let raw = await cli(["session", "start", "--cursor", "--no-trace", "--name", "butterfly"], timeout: 10)
         guard let o = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any],
               let id = (o["data"] as? [String: Any])?["session_id"] as? String else { log("no session: \(raw.prefix(200))"); return nil }
-        // A bit bigger, and a short pause on each target so the click is visible.
-        _ = await cli(["cursor-overlay", "enable", "--size", "1.4", "--dwell-ms", "220", "--travel-ms", "120,400"], session: id, timeout: 10)
+        // Butterfly style: violet→pink arrow, pink ripple and highlight, a short pause on each target so the click is visible.
+        var overlay = ["cursor-overlay", "enable", "--accent", "#FF6BAD", "--dwell-ms", "220", "--travel-ms", "120,400", "--bow", "1.4"]
+        if let art = cursorArt() { overlay += ["--image", art.path, "--hotspot", "4,3", "--size", "1.2"] } else { overlay += ["--fill", "#8C78F7", "--rim", "#FFFFFF", "--size", "1.4"] }
+        log("overlay: " + (await cli(overlay, session: id, timeout: 10)).prefix(300))
         return id
+    }
+
+    /// The agent cursor PNG (drawn once into Application Support): Design.violet → Design.pink, white rim, pink glow.
+    private static func cursorArt() -> URL? {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Butterfly")
+        let url = dir.appendingPathComponent("agent-cursor-v1.png")
+        if FileManager.default.fileExists(atPath: url.path) { return url }
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let pt = NSSize(width: 28, height: 32), scale: CGFloat = 2
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(pt.width * scale), pixelsHigh: Int(pt.height * scale), bitsPerSample: 8,
+                                         samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+              let gc = NSGraphicsContext(bitmapImageRep: rep) else { return nil }
+        rep.size = pt
+        let ctx = gc.cgContext
+        ctx.translateBy(x: 0, y: pt.height * scale); ctx.scaleBy(x: scale, y: -scale)   // top-left origin, in points
+        let p = CGMutablePath()
+        p.addLines(between: [CGPoint(x: 4, y: 3), CGPoint(x: 4, y: 24), CGPoint(x: 9.5, y: 19), CGPoint(x: 13.5, y: 28),
+                             CGPoint(x: 17, y: 26.5), CGPoint(x: 13, y: 17.5), CGPoint(x: 20.5, y: 17.5)])
+        p.closeSubpath()
+        let violet = CGColor(red: 0.55, green: 0.47, blue: 0.97, alpha: 1), pink = CGColor(red: 1, green: 0.42, blue: 0.68, alpha: 1)
+        ctx.saveGState()
+        ctx.setShadow(offset: .zero, blur: 6, color: pink.copy(alpha: 0.75))
+        ctx.addPath(p); ctx.setFillColor(pink); ctx.fillPath()
+        ctx.restoreGState()
+        ctx.saveGState()
+        ctx.addPath(p); ctx.clip()
+        if let g = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: [violet, pink] as CFArray, locations: [0, 1]) {
+            ctx.drawLinearGradient(g, start: CGPoint(x: 4, y: 3), end: CGPoint(x: 17, y: 28), options: [])
+        }
+        ctx.restoreGState()
+        ctx.addPath(p); ctx.setStrokeColor(.white); ctx.setLineWidth(1.6); ctx.setLineJoin(.round); ctx.strokePath()
+        gc.flushGraphics()
+        guard let png = rep.representation(using: .png, properties: [:]), (try? png.write(to: url)) != nil else { return nil }
+        return url
     }
 
     /// Actions are headless (no focus change): bring the app being worked on to the front so you can watch it.
@@ -291,7 +327,7 @@ enum DesktopAgent {
         guard let cmd = a.first else { return "Working…" }
         switch cmd {
         case "snapshot", "find", "get", "is", "list-windows", "list-apps", "list-surfaces": return "Reading the screen…"
-        case "click", "double-click", "right-click": return "Clicking…"
+        case "click", "double-click", "right-click", "batch": return "Clicking…"
         case "type", "set-value": return "Typing…"
         case "press": return "Pressing \(a.dropFirst().first ?? "keys")…"
         case "launch": return "Opening \(a.dropFirst().first ?? "app")…"
