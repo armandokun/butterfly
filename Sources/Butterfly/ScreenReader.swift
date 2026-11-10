@@ -29,7 +29,7 @@ enum ScreenReader {
 
     /// What you typed, never what you read: password fields, plus every field you've typed into in this window
     /// (the one you're in now, and ones you filled and left). Pre-filled text, URLs and labels stay readable.
-    struct Field: Sendable { let rect: CGRect; let chars: Int; var value: String? = nil }
+    struct Field: Sendable { let rect: CGRect; let chars: Int }
 
     /// Fields you typed into, per window. Captures run one at a time, so no lock.
     nonisolated(unsafe) private static var typedInto: (window: AXUIElement?, fields: [AXUIElement]) = (nil, [])
@@ -55,15 +55,16 @@ enum ScreenReader {
                 typedInto.fields.append(field)
             }
             var out: [Field] = []
-            for el in typedInto.fields { if let r = frame(el), r.width > 4, r.height > 4, small(r) { out.append(Field(rect: r, chars: length(el), value: value(el))) } }
+            for el in typedInto.fields { if let r = frame(el), r.width > 4, r.height > 4, small(r) { out.append(Field(rect: r, chars: length(el))) } }
 
-            // Password fields, wherever they are.
+            // Sensitive fields wherever they are, typed or autofilled: passwords, cards, IBANs, codes.
             var stack: [(AXUIElement, Int)] = [(window, 0)], seen = 0
             let deadline = Date().addingTimeInterval(0.8)
             while let (el, depth) = stack.popLast(), seen < 4000, Date() < deadline {
                 seen += 1
                 if let kind = inputKind(el) {
-                    if kind == .secure, let r = frame(el), r.width > 4, r.height > 4 { out.append(Field(rect: r, chars: max(length(el), 8))) }
+                    if kind == .secure || sensitive(el), let r = frame(el), r.width > 4, r.height > 4,
+                       !out.contains(where: { $0.rect == r }) { out.append(Field(rect: r, chars: kind == .secure ? max(length(el), 8) : length(el))) }
                     continue
                 }
                 guard depth < 40 else { continue }
@@ -99,6 +100,39 @@ enum ScreenReader {
         // Web: contenteditable boxes (chat composers).
         if AXUIElementCopyAttributeValue(el, "AXEditableAncestor" as CFString, &v) == .success, let anc = v, CFEqual(anc, el) { return .field }
         return nil
+    }
+
+    /// Labels that mean "don't remember this" (English + Lithuanian), matched on the field's placeholder, label, title and id.
+    private static let sensitiveWords = ["card", "cvc", "cvv", "csc", "security code", "expir", "mm/yy", "mm / yy", "iban", "swift code", "bic",
+                                         "account number", "routing", "sort code", "ssn", "social security", "pin", "otp", "one-time",
+                                         "verification code", "2fa", "passcode", "tax id", "personal code", "kortel", "asmens kod", "sąskait"]
+
+    nonisolated private static func sensitive(_ el: AXUIElement) -> Bool {
+        var label = ""
+        for attr in ["AXPlaceholderValue", kAXDescriptionAttribute, kAXTitleAttribute, kAXHelpAttribute, "AXDOMIdentifier", kAXIdentifierAttribute] {
+            var v: CFTypeRef?
+            if AXUIElementCopyAttributeValue(el, attr as CFString, &v) == .success, let t = v as? String { label += " " + t.lowercased() }
+        }
+        var t: CFTypeRef?, tv: CFTypeRef?
+        if AXUIElementCopyAttributeValue(el, kAXTitleUIElementAttribute as CFString, &t) == .success, let te = t,
+           AXUIElementCopyAttributeValue(te as! AXUIElement, kAXValueAttribute as CFString, &tv) == .success, let s = tv as? String { label += " " + s.lowercased() }
+        let words = Set(label.split { !$0.isLetter && !$0.isNumber }.map(String.init))
+        // Phrases anywhere; single words at a word start ("cardholder", not "dashboard"); short ones whole ("pin", not "pinned").
+        if sensitiveWords.contains(where: { k in
+            k.contains(" ") || k.contains("/") || k.contains("-") ? label.contains(k) : k.count <= 3 ? words.contains(k) : words.contains { $0.hasPrefix(k) }
+        }) { return true }
+        // Unlabelled but looks like a card number.
+        if let v = value(el) { return luhn(v) }
+        return false
+    }
+
+    /// 13–19 digits passing the Luhn check: a card number.
+    nonisolated private static func luhn(_ s: String) -> Bool {
+        let d = s.filter { $0 != " " && $0 != "-" }
+        guard (13...19).contains(d.count), d.allSatisfy(\.isNumber) else { return false }
+        var sum = 0
+        for (i, c) in d.reversed().enumerated() { var n = c.wholeNumberValue!; if i % 2 == 1 { n *= 2; if n > 9 { n -= 9 } }; sum += n }
+        return sum % 10 == 0
     }
 
     nonisolated private static func value(_ el: AXUIElement) -> String? {
@@ -137,37 +171,6 @@ enum ScreenReader {
             return (CGRect(x: (r.minX - window.minX) * sx, y: (r.minY - window.minY) * sy, width: r.width * sx, height: r.height * sy), f.chars)
         }
         return paint(image, rects, scale: sy)
-    }
-
-    /// The same text shown elsewhere — autocomplete rows, "Search for …", previews — gets asterisks too.
-    nonisolated static func maskEchoes(_ image: CGImage, of values: [String], scale: CGFloat) async -> CGImage {
-        let needles = values.map { $0.lowercased() }.filter { $0.count >= 3 }
-        guard !needles.isEmpty else { return image }
-        let rects: [(CGRect, Int)] = await Task.detached(priority: .utility) {
-            let req = VNRecognizeTextRequest()
-            req.recognitionLevel = .fast
-            req.usesLanguageCorrection = false
-            try? VNImageRequestHandler(cgImage: image).perform([req])
-            var out: [(CGRect, Int)] = []
-            let W = CGFloat(image.width), H = CGFloat(image.height)
-            for o in req.results ?? [] {
-                guard let c = o.topCandidates(1).first else { continue }
-                let line = c.string.lowercased()
-                for n in needles {
-                    var from = line.startIndex
-                    while let r = line.range(of: n, range: from..<line.endIndex) {
-                        from = r.upperBound
-                        let lo = c.string.index(c.string.startIndex, offsetBy: line.distance(from: line.startIndex, to: r.lowerBound))
-                        let hi = c.string.index(lo, offsetBy: n.count, limitedBy: c.string.endIndex) ?? c.string.endIndex
-                        guard let box = try? c.boundingBox(for: lo..<hi)?.boundingBox else { continue }
-                        // Vision: normalized, bottom-left. Ours: pixels, top-left.
-                        out.append((CGRect(x: box.minX * W - 2, y: (1 - box.maxY) * H - 2, width: box.width * W + 4, height: box.height * H + 4), n.count))
-                    }
-                }
-            }
-            return out
-        }.value
-        return paint(image, rects, scale: scale)
     }
 
     /// `rects` in image pixels, top-left origin, each with how many asterisks to draw.
