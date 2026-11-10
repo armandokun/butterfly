@@ -16,7 +16,7 @@ enum Jev {
         let questions: [String: Any] = [
             "route": ["type": "choice", "instructions": "What kind of request is the transcript?", "criteria": [
                 "open_app": "Only open, launch or switch to one app. Nothing else to do in it.",
-                "math": "A calculation to answer, without naming an app to do it in.",
+                "math": "Just wants the result of a calculation. Not when it names an app or says to do it here / in this window.",
                 "web": "A general question answered from the web: facts, news, weather, prices, definitions, how-tos.",
                 "memory": "About what the user did, saw or worked on before (their own screen history).",
                 "agent": "Anything else: doing something in an app, several steps, typing, sending, clicking, settings.",
@@ -24,9 +24,9 @@ enum Jev {
             "app": ["type": "choice", "instructions": "Which app does the transcript name?", "criteria": appOptions],
         ]
         let t0 = Date()
-        guard let a = await ask(state: ["transcript": transcript], questions: questions, key: key),
-              let r = a["route"], r.confidence >= 0.8 else { return .agent }
+        guard let a = await ask(state: ["transcript": transcript], questions: questions, key: key), let r = a["route"] else { return .agent }
         DesktopAgent.log(String(format: "jev %.2fs: %@ %.2f · app %@", Date().timeIntervalSince(t0), r.choice, r.confidence, a["app"]?.choice ?? "-"))
+        guard r.confidence >= 0.8 else { return .agent }
         switch r.choice {
         case "open_app":
             guard let c = a["app"], c.confidence >= 0.8, c.choice != "none", let i = Int(c.choice.dropFirst()), i < apps.count else { return .agent }

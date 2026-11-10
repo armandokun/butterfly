@@ -162,6 +162,11 @@ enum DesktopAgent {
     /// `progress`: a short line for the notch ("Clicking Send…").
     static func run(_ request: String, front: NSRunningApplication?, key: String, progress: @escaping (String) -> Void) async throws -> Outcome {
         log("request: \(request)")
+        // The agent session and a read of the front app, started when you pressed the talk key (see `warm`),
+        // so Gemini's first call already sees the screen.
+        let frontName = front?.localizedName
+        let prep = takeWarm(for: front) ?? warmTask(frontName)
+        func dropPrep() { Task { if let id = await prep.value.session { _ = await cli(["session", "end", id]) } } }
         // Fast lane: Jev sorts the request in ~0.25 s; simple ones never reach the Gemini loop.
         var prefetched: String?
         if let jevKey = Keychain.apiKey {
@@ -170,16 +175,16 @@ enum DesktopAgent {
                 progress("Opening \(app.name)…")
                 let cfg = NSWorkspace.OpenConfiguration(); cfg.activates = true
                 _ = try? await NSWorkspace.shared.openApplication(at: app.url, configuration: cfg)
-                log("done: opened \(app.name)")
+                log("done: opened \(app.name)"); dropPrep()
                 return Outcome(summary: "Opened \(app.name)", answer: nil, recap: nil)
             case .math:
-                if let a = Arithmetic.answer(request) { log("done: \(a)"); return Outcome(summary: "Calculated", answer: a, recap: nil) }
-                progress("Searching…")
+                if let a = Arithmetic.answer(request) { log("done: \(a)"); dropPrep(); return Outcome(summary: "Calculated", answer: a, recap: nil) }
+                progress("Searching…"); dropPrep()
                 return Outcome(summary: "Answer", answer: await webAnswer(request, key: key), recap: nil)
             case .web:
                 progress("Searching…")
                 let a = await webAnswer(request, key: key)
-                if !a.hasPrefix("{") { return Outcome(summary: "Answer", answer: a, recap: nil) }
+                if !a.hasPrefix("{") { dropPrep(); return Outcome(summary: "Answer", answer: a, recap: nil) }
             case .memory:
                 progress("Remembering…")
                 prefetched = memory(period: request, keywords: request).0
@@ -230,7 +235,11 @@ enum DesktopAgent {
         var recapRange = prefetched == nil ? "" : (ScreenMemory.window(in: request).map { ScreenMemory.range($0.from, $0.to) } ?? "")
         // A session with the visible agent cursor, started on the first desktop action: web answers and
         // memory questions never show a cursor.
-        var session: String?, sessionTried = false, lastApp: String?
+        let ready = await prep.value
+        var session = ready.session, sessionTried = ready.session != nil, lastApp = ready.snapshot == nil ? nil : frontName
+        if let snap = ready.snapshot, prefetched == nil {
+            contents[0] = ["role": "user", "parts": [["text": first + "\n\nSnapshot of \(frontName ?? "the front app") right now (act on its refs; no need to snapshot again):\n" + snap]]]
+        }
         // Apps running before we start: anything new was launched by the agent.
         let before = Set(NSWorkspace.shared.runningApplications.map(\.processIdentifier))
         defer { if let id = session { Task.detached { _ = await cli(["session", "end", id]) } } }
@@ -367,15 +376,60 @@ enum DesktopAgent {
     // MARK: Helpers
 
     /// `session start --no-trace` + our styled overlay (no `--cursor`: that flashes the default arrow first) → its id; nil if it can't start (the agent still works, just unseen).
+    // MARK: Warm-up
+
+    typealias Prep = Task<(session: String?, snapshot: String?), Never>
+    private static var warmed: (pid: pid_t, task: Prep, at: Date)?
+
+    /// Call when listening starts: the first snapshot of an app costs ~2 s, so it runs while you talk.
+    static func warm(_ app: NSRunningApplication?) {
+        guard let app, binary != nil else { return }
+        if let w = warmed { Task { if let id = await w.task.value.session { _ = await cli(["session", "end", id]) } } }
+        warmed = (app.processIdentifier, warmTask(app.localizedName), Date())
+    }
+
+    private static func takeWarm(for app: NSRunningApplication?) -> Prep? {
+        defer { warmed = nil }
+        guard let w = warmed else { return nil }
+        guard let app, w.pid == app.processIdentifier, Date().timeIntervalSince(w.at) < 60 else {
+            Task { if let id = await w.task.value.session { _ = await cli(["session", "end", id]) } }
+            return nil
+        }
+        return w.task
+    }
+
+    private static func warmTask(_ frontName: String?) -> Prep {
+        Task { () -> (session: String?, snapshot: String?) in
+            guard binary != nil, let frontName else { return (nil, nil) }
+            let t0 = Date()
+            guard let id = await openSession() else { return (nil, nil) }
+            async let styled: Void = styleCursor(id)
+            var snap = await cli(["snapshot", "--app", frontName, "-i", "--compact"], session: id)
+            if snap.count > 40_000 { snap = await cli(["snapshot", "--app", frontName, "-i", "--skeleton"], session: id) }
+            await styled
+            log(String(format: "prep: %@ ready in %.1fs, %d chars", frontName, Date().timeIntervalSince(t0), snap.count))
+            return (id, snap.contains("\"ok\":true") ? ScreenReader.redact(snap) : nil)
+        }
+    }
+
     private static func startSession() async -> String? {
+        guard let id = await openSession() else { return nil }
+        await styleCursor(id)
+        return id
+    }
+
+    private static func openSession() async -> String? {
         let raw = await cli(["session", "start", "--no-trace", "--name", "butterfly"], timeout: 10)
         guard let o = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any],
               let id = (o["data"] as? [String: Any])?["session_id"] as? String else { log("no session: \(raw.prefix(200))"); return nil }
+        return id
+    }
+
+    private static func styleCursor(_ id: String) async {
         // Butterfly style: violet→pink arrow, pink ripple and highlight, a short pause on each target so the click is visible.
         var overlay = ["cursor-overlay", "enable", "--accent", "#FF6BAD", "--dwell-ms", "60", "--travel-ms", "70,200", "--bow", "1.2"]
         if let art = cursorArt() { overlay += ["--image", art.path, "--hotspot", "4,3", "--size", "1.2"] } else { overlay += ["--fill", "#8C78F7", "--rim", "#FFFFFF", "--size", "1.4"] }
-        log("overlay: " + (await cli(overlay, session: id, timeout: 10)).prefix(300))
-        return id
+        log("overlay: " + (await cli(overlay, session: id, timeout: 10)).prefix(120))
     }
 
     /// The agent cursor PNG (drawn once into Application Support): Design.violet → Design.pink, white rim, pink glow.

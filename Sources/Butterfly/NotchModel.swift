@@ -207,6 +207,7 @@ final class NotchModel: ObservableObject {
         Ducker.duck()
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
         frontApp = NSWorkspace.shared.frontmostApplication.flatMap { $0.bundleIdentifier == Bundle.main.bundleIdentifier ? nil : $0 }
+        if !dictation { DesktopAgent.warm(frontApp) }
         startTask = Task {
             do { try await recorder.start(onAudio: {}) }
             catch { show(.message("Mic error: \(error.localizedDescription)")) }
@@ -331,7 +332,10 @@ final class NotchModel: ObservableObject {
     func say(_ text: String) {
         frontApp = NSWorkspace.shared.frontmostApplication.flatMap { $0.bundleIdentifier == Bundle.main.bundleIdentifier ? nil : $0 }
         transcript = text
-        Task { await handle(text) }
+        DesktopAgent.warm(frontApp)
+        // As if spoken: the request arrives after you've talked for a bit (BUTTERFLY_SAY_DELAY seconds).
+        let delay = Double(ProcessInfo.processInfo.environment["BUTTERFLY_SAY_DELAY"] ?? "") ?? 0
+        Task { try? await Task.sleep(for: .seconds(delay)); await handle(text) }
     }
 
     private func handle(_ text: String) async {
