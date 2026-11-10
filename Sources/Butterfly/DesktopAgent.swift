@@ -186,9 +186,10 @@ enum DesktopAgent {
         """
         var contents: [[String: Any]] = [["role": "user", "parts": [["text": "The user said: “\(request)”"]]]]
         var recapRange = ""
-        // A session with the visible agent cursor: you see where it points and what it clicks.
-        let session = await startSession()
-        defer { if let session { Task.detached { _ = await cli(["session", "end", session]) } } }
+        // A session with the visible agent cursor, started on the first desktop action: web answers and
+        // memory questions never show a cursor.
+        var session: String?, sessionTried = false
+        defer { if let id = session { Task.detached { _ = await cli(["session", "end", id]) } } }
         for _ in 0..<maxTurns {
             try Task.checkCancellation()
             let body: [String: Any] = [
@@ -231,6 +232,7 @@ enum DesktopAgent {
                     a.removeAll { $0 == "--force" }
                     progress(describe(a))
                     bringForward(a)
+                    if !sessionTried { sessionTried = true; session = await startSession() }
                     result = ScreenReader.redact(await cli(a, stdin: args["stdin"] as? String, session: session))
                     if a.first == "launch" { bringForward(a) }
                 case "type_text":
@@ -306,9 +308,9 @@ enum DesktopAgent {
 
     // MARK: Helpers
 
-    /// `session start --cursor --no-trace` → its id; nil if it can't start (the agent still works, just unseen).
+    /// `session start --no-trace` + our styled overlay (no `--cursor`: that flashes the default arrow first) → its id; nil if it can't start (the agent still works, just unseen).
     private static func startSession() async -> String? {
-        let raw = await cli(["session", "start", "--cursor", "--no-trace", "--name", "butterfly"], timeout: 10)
+        let raw = await cli(["session", "start", "--no-trace", "--name", "butterfly"], timeout: 10)
         guard let o = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any],
               let id = (o["data"] as? [String: Any])?["session_id"] as? String else { log("no session: \(raw.prefix(200))"); return nil }
         // Butterfly style: violet→pink arrow, pink ripple and highlight, a short pause on each target so the click is visible.
