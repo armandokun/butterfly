@@ -161,6 +161,31 @@ enum DesktopAgent {
 
     /// `progress`: a short line for the notch ("Clicking Send…").
     static func run(_ request: String, front: NSRunningApplication?, key: String, progress: @escaping (String) -> Void) async throws -> Outcome {
+        log("request: \(request)")
+        // Fast lane: Jev sorts the request in ~0.25 s; simple ones never reach the Gemini loop.
+        var prefetched: String?
+        if let jevKey = Keychain.apiKey {
+            switch await Jev.route(request, key: jevKey) {
+            case .openApp(let app):
+                progress("Opening \(app.name)…")
+                let cfg = NSWorkspace.OpenConfiguration(); cfg.activates = true
+                _ = try? await NSWorkspace.shared.openApplication(at: app.url, configuration: cfg)
+                log("done: opened \(app.name)")
+                return Outcome(summary: "Opened \(app.name)", answer: nil, recap: nil)
+            case .math:
+                if let a = Arithmetic.answer(request) { log("done: \(a)"); return Outcome(summary: "Calculated", answer: a, recap: nil) }
+                progress("Searching…")
+                return Outcome(summary: "Answer", answer: await webAnswer(request, key: key), recap: nil)
+            case .web:
+                progress("Searching…")
+                let a = await webAnswer(request, key: key)
+                if !a.hasPrefix("{") { return Outcome(summary: "Answer", answer: a, recap: nil) }
+            case .memory:
+                progress("Remembering…")
+                prefetched = memory(period: request, keywords: request).0
+            case .agent: break
+            }
+        }
         guard binary != nil else { throw Failure(message: "Install agent-desktop: npm i -g agent-desktop") }
         let guides = await loadGuides()
         let f = DateFormatter(); f.dateFormat = "EEEE, yyyy-MM-dd HH:mm"
@@ -199,8 +224,10 @@ enum DesktopAgent {
         agent-desktop guide:
         \(guides)
         """
-        var contents: [[String: Any]] = [["role": "user", "parts": [["text": "The user said: “\(request)”"]]]]
-        var recapRange = ""
+        var first = "The user said: “\(request)”"
+        if let prefetched { first += "\n\nScreen memory, already fetched for this (call `screen_memory` only if it's missing something):\n" + prefetched }
+        var contents: [[String: Any]] = [["role": "user", "parts": [["text": first]]]]
+        var recapRange = prefetched == nil ? "" : (ScreenMemory.window(in: request).map { ScreenMemory.range($0.from, $0.to) } ?? "")
         // A session with the visible agent cursor, started on the first desktop action: web answers and
         // memory questions never show a cursor.
         var session: String?, sessionTried = false, lastApp: String?
@@ -427,7 +454,7 @@ enum DesktopAgent {
     }
 
     /// ~/Library/Logs/Butterfly/agent.log
-    private static func log(_ s: String) {
+    static func log(_ s: String) {
         if ProcessInfo.processInfo.environment["BUTTERFLY_DEBUG"] == "1" { print("agent:", s) }
         let dir = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("Logs/Butterfly")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

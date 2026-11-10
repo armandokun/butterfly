@@ -214,6 +214,8 @@ private struct KeysPane: View {
         PageBody {
             KeySection(title: "Gemini", footer: "Runs voice commands and writes meeting transcripts. Get one at aistudio.google.com.", prompt: "AIza…",
                        saved: Keychain.geminiKey != nil, save: Keychain.saveGemini)
+            KeySection(title: "TypeSafe", footer: "Optional. Jev sorts each request in a quarter second, so opening apps, math and web questions skip the slower agent.", prompt: "ts_…",
+                       saved: Keychain.apiKey != nil, save: Keychain.save)
             Text("Keys are stored in your Keychain and never leave this Mac except to call their service.").secondaryText().padding(.horizontal, 4)
         }
     }
