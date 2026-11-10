@@ -9,7 +9,10 @@ enum DesktopAgent {
     static let model = "gemini-3.8-flash"
     static let maxTurns = 30
 
-    struct Recap { var title: String; var range: String; var items: [(time: String, app: String, text: String)] }
+    struct Recap {
+        struct Item { var time: String; var goal: String; var apps: [String]; var minutes: Int? }
+        var title: String; var range: String; var items: [Item]
+    }
     struct Outcome { var summary: String; var answer: String?; var recap: Recap? }
     struct Failure: LocalizedError { let message: String; var errorDescription: String? { message } }
 
@@ -103,13 +106,15 @@ enum DesktopAgent {
              "parameters": ["type": "object", "properties": [
                 "summary": ["type": "string", "description": "3-6 words of what was done, e.g. 'Sent the message to Ana'."],
                 "answer": ["type": "string", "description": "Text to show the user, when they asked a question. Short."],
-                "recap": ["type": "object", "description": "Only for 'what did I do' questions shown as a timeline.",
+                "recap": ["type": "object", "description": "Only for 'what did I do' questions: the GOALS the user worked toward, as a timeline.",
                           "properties": [
-                            "title": ["type": "string"],
+                            "title": ["type": "string", "description": "2-3 words, e.g. 'This week', 'Yesterday'"],
                             "items": ["type": "array", "items": ["type": "object", "properties": [
-                                "time": ["type": "string", "description": "HH:mm, or a 3-letter weekday for multi-day periods"],
-                                "app": ["type": "string"], "text": ["type": "string", "description": "≤ 55 characters, concrete"]],
-                                "required": ["time", "app", "text"]]]],
+                                "time": ["type": "string", "description": "When it started: HH:mm, or a 3-letter weekday for multi-day periods"],
+                                "goal": ["type": "string", "description": "The outcome they were after, ≤ 36 characters, verb first: 'Shipped Butterfly agent rewrite', 'Planned Ryanair trip'. Not a click-by-click action."],
+                                "apps": ["type": "array", "items": ["type": "string"], "description": "Apps used for it, exactly as named in screen memory, most used first, max 4."],
+                                "minutes": ["type": "integer", "description": "Approximate total minutes spent on it."]],
+                                "required": ["time", "goal", "apps"]]]],
                           "required": ["title", "items"]]],
                 "required": ["summary"]]],
         ],
@@ -141,8 +146,12 @@ enum DesktopAgent {
         - Never delete, send, buy, quit apps or close windows with unsaved work unless the user asked for exactly that. \
         Never pass `--force`.
         - Questions about the past ("what did I do this week", "what was that price I saw") → `screen_memory`, then \
-        `finish` with `answer`, or `recap` for "what did I do" (6–12 items covering every day of a multi-day period, \
-        3–7 for a short one, time order). If they want it written somewhere, `type_text` the summary instead.
+        `finish` with `answer`, or `recap` for "what did I do". A recap lists GOALS, not actions: group everything \
+        that served one purpose (a project, a task, a decision, a trip, an errand) across apps and hours into one item, \
+        named by its outcome ("Shipped the Butterfly agent rewrite", not "Edited Planner.swift in Cursor"). \
+        3–6 goals for a short period, 5–10 for a multi-day one, covering every day, time order. Leave out idle \
+        browsing under ~10 minutes unless it was most of the period. If they want it written somewhere, \
+        `type_text` the summary instead.
         - Questions about what's on screen now → `look` or a snapshot, then `finish` with `answer`.
         - If it can't be done, `finish` with `answer` saying why in one sentence.
 
@@ -184,8 +193,9 @@ enum DesktopAgent {
                 case "finish":
                     var recap: Recap?
                     if let r = args["recap"] as? [String: Any], let items = r["items"] as? [[String: Any]], !items.isEmpty {
-                        recap = Recap(title: r["title"] as? String ?? "Recap", range: recapRange, items: items.prefix(12).map {
-                            (($0["time"] as? String) ?? "", ($0["app"] as? String) ?? "", ($0["text"] as? String) ?? "") })
+                        recap = Recap(title: r["title"] as? String ?? "Recap", range: recapRange, items: items.prefix(10).map {
+                            Recap.Item(time: ($0["time"] as? String) ?? "", goal: ($0["goal"] as? String) ?? ($0["text"] as? String) ?? "",
+                                       apps: ($0["apps"] as? [String]) ?? [], minutes: ($0["minutes"] as? NSNumber)?.intValue) })
                     }
                     let answer = (args["answer"] as? String).flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
                     return Outcome(summary: args["summary"] as? String ?? "Done", answer: answer, recap: recap)

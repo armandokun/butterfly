@@ -506,8 +506,8 @@ private struct Waveform: View {
     }
 }
 
-/// "What did I do in the last five minutes?" — a timeline: period header, then one row per activity with
-/// time, the app's icon and a short line. Same bones as the calendar card.
+/// "What did I do this week?" — a timeline of goals: period header, then one row per goal with when it started,
+/// the outcome, time spent and the apps it took.
 private struct RecapCard: View {
     let title: String
     let range: String
@@ -524,13 +524,13 @@ private struct RecapCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Self.gap) {
             NotchCardHeader(title: title, subtitle: range) {
-                Image(systemName: "clock.arrow.circlepath")
+                Image(systemName: "target")
                     .font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
                     .frame(width: 32, height: 32)
                     .background(LinearGradient(colors: [Design.violet, Design.pink], startPoint: .topLeading, endPoint: .bottomTrailing),
                                 in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             } trailing: {
-                Text("\(items.count) \(items.count == 1 ? "activity" : "activities")")
+                Text("\(items.count) \(items.count == 1 ? "goal" : "goals")")
             }
             .frame(height: Self.header)
 
@@ -538,9 +538,10 @@ private struct RecapCard: View {
                 ForEach(items.indices, id: \.self) { i in
                     let it = items[i]
                     HStack(spacing: 8) {
-                        Text(it.time)
+                        // "Mon 12:10" → "Mon": on a multi-day recap the day is what matters.
+                        Text(it.time.first?.isLetter == true ? String(it.time.prefix(3)) : it.time)
                             .font(.system(size: 12, weight: .medium).monospacedDigit()).foregroundStyle(.white.opacity(0.5))
-                            .frame(width: 44, alignment: .leading)
+                            .frame(width: 38, alignment: .leading)
                         // Thread line: dot per activity, joined top to bottom.
                         ZStack {
                             Rectangle().fill(.white.opacity(0.12)).frame(width: 1)
@@ -548,13 +549,21 @@ private struct RecapCard: View {
                             Circle().fill(.white.opacity(0.7)).frame(width: 5, height: 5)
                         }
                         .frame(width: 8, height: Self.row + 4)
-                        if let img = icon(it.app) {
-                            Image(nsImage: img).resizable().interpolation(.high).frame(width: 18, height: 18)
-                        } else {
-                            Image(systemName: "app.fill").font(.system(size: 14)).foregroundStyle(.white.opacity(0.4)).frame(width: 18, height: 18)
+                        Text(it.goal).font(.system(size: 13, weight: .medium)).foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.85)
+                        Spacer(minLength: 6)
+                        if let m = it.minutes, m > 0 {
+                            Text(m >= 60 ? "\(m / 60)h\(m % 60 >= 10 ? " \(m % 60)m" : "")" : "\(m)m")
+                                .font(.system(size: 11, weight: .medium).monospacedDigit()).foregroundStyle(.white.opacity(0.4))
                         }
-                        Text(it.text).font(.system(size: 13, weight: .medium)).foregroundStyle(.white).lineLimit(1)
-                        Spacer(minLength: 0)
+                        // The apps it took, overlapping like avatars.
+                        HStack(spacing: -5) {
+                            ForEach(it.apps.prefix(4).indices, id: \.self) { j in
+                                if let img = icon(it.apps[j]) {
+                                    Image(nsImage: img).resizable().interpolation(.high).frame(width: 16, height: 16)
+                                        .zIndex(Double(-j))
+                                }
+                            }
+                        }
                     }
                     .frame(height: Self.row)
                 }

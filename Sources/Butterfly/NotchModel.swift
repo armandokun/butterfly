@@ -20,8 +20,8 @@ final class NotchModel: ObservableObject {
         case stopPrompt(app: String)                            // expanded: "Call ended?" · Keep / Stop
     }
     struct Recording: Equatable { let app: String; let since: Date }
-    /// One activity in a "what did I do" recap: when, in which app, what.
-    struct RecapItem: Equatable { let time: String; let app: String; let text: String }
+    /// One goal in a "what did I do" recap: when it started, what it was for, the apps used, time spent.
+    struct RecapItem: Equatable { let time: String; let goal: String; let apps: [String]; let minutes: Int? }
 
     /// A meeting is being recorded: the notch shows a red dot + time, hover to stop.
     @Published var recording: Recording? {
@@ -343,7 +343,7 @@ final class NotchModel: ObservableObject {
                 self?.show(.system(symbol: "sparkles", title: line, detail: text), for: 60)
             }
             if let recap = r.recap {
-                let items = recap.items.map { RecapItem(time: $0.time, app: $0.app, text: $0.text) }
+                let items = recap.items.map { RecapItem(time: $0.time, goal: $0.goal, apps: $0.apps, minutes: $0.minutes) }
                 return show(.recap(title: recap.title, range: recap.range, items: items), for: 4 + Double(items.count) * 1.5)
             }
             if let a = r.answer {
