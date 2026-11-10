@@ -116,18 +116,54 @@ enum ScreenReader {
         var t: CFTypeRef?, tv: CFTypeRef?
         if AXUIElementCopyAttributeValue(el, kAXTitleUIElementAttribute as CFString, &t) == .success, let te = t,
            AXUIElementCopyAttributeValue(te as! AXUIElement, kAXValueAttribute as CFString, &tv) == .success, let s = tv as? String { label += " " + s.lowercased() }
-        let words = Set(label.split { !$0.isLetter && !$0.isNumber }.map(String.init))
-        // Phrases anywhere; single words at a word start ("cardholder", not "dashboard"); short ones whole ("pin", not "pinned").
-        if sensitiveWords.contains(where: { k in
-            k.contains(" ") || k.contains("/") || k.contains("-") ? label.contains(k) : k.count <= 3 ? words.contains(k) : words.contains { $0.hasPrefix(k) }
-        }) { return true }
+        if sensitiveLabel(label) { return true }
         // Unlabelled but looks like a card number.
         if let v = value(el) { return luhn(v) }
         return false
     }
 
+    nonisolated static func sensitiveLabel(_ text: String) -> Bool {
+        let label = text.lowercased()
+        let words = Set(label.split { !$0.isLetter && !$0.isNumber }.map(String.init))
+        // Phrases anywhere; single words at a word start ("cardholder", not "dashboard"); short ones whole ("pin", not "pinned").
+        return sensitiveWords.contains { k in
+            k.contains(" ") || k.contains("/") || k.contains("-") ? label.contains(k) : k.count <= 3 ? words.contains(k) : words.contains { $0.hasPrefix(k) }
+        }
+    }
+
+    /// agent-desktop output on its way to the model: sensitive field values become asterisks, and so does any
+    /// card number anywhere in it. Same rules as screen memory.
+    nonisolated static func redact(_ json: String) -> String {
+        guard json.contains("\"value\""), let data = json.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) else { return redactCards(json) }
+        let inputs: Set<String> = ["textfield", "securetextfield", "textarea", "searchfield", "combobox", "AXTextField", "AXSecureTextField", "AXTextArea", "AXComboBox"]
+        func walk(_ x: Any) -> Any {
+            if let a = x as? [Any] { return a.map(walk) }
+            guard var d = x as? [String: Any] else { return (x as? String).map(redactCards) ?? x }
+            for (k, v) in d { d[k] = walk(v) }
+            if let v = d["value"] as? String, !v.isEmpty, let role = d["role"] as? String, inputs.contains(role) {
+                let label = [d["name"], d["description"], d["placeholder"], (d["native_id"] as? [String: Any])?["value"]].compactMap { $0 as? String }.joined(separator: " ")
+                if role.lowercased().contains("secure") || sensitiveLabel(label) { d["value"] = String(repeating: "*", count: min(v.count, 24)) }
+            }
+            return d
+        }
+        guard let out = try? JSONSerialization.data(withJSONObject: walk(obj), options: [.sortedKeys]), let s = String(data: out, encoding: .utf8) else { return redactCards(json) }
+        return s
+    }
+
+    private static let cardPattern = try! NSRegularExpression(pattern: #"\b(?:\d[ -]?){12,18}\d\b"#)
+
+    nonisolated static func redactCards(_ s: String) -> String {
+        let ns = s as NSString
+        var out = s
+        for m in cardPattern.matches(in: s, range: NSRange(location: 0, length: ns.length)).reversed() where luhn(ns.substring(with: m.range)) {
+            out = (out as NSString).replacingCharacters(in: m.range, with: String(repeating: "*", count: m.range.length))
+        }
+        return out
+    }
+
     /// 13–19 digits passing the Luhn check: a card number.
-    nonisolated private static func luhn(_ s: String) -> Bool {
+    nonisolated static func luhn(_ s: String) -> Bool {
         let d = s.filter { $0 != " " && $0 != "-" }
         guard (13...19).contains(d.count), d.allSatisfy(\.isNumber) else { return false }
         var sum = 0

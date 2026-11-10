@@ -205,7 +205,7 @@ enum DesktopAgent {
                     a.removeAll { $0 == "--force" }
                     progress(describe(a))
                     bringForward(a)
-                    result = await cli(a, stdin: args["stdin"] as? String, session: session)
+                    result = ScreenReader.redact(await cli(a, stdin: args["stdin"] as? String, session: session))
                     if a.first == "launch" { bringForward(a) }
                 case "type_text":
                     let text = args["text"] as? String ?? ""
@@ -225,7 +225,9 @@ enum DesktopAgent {
                     } else { result = #"{"ok":false,"error":"bad url"}"# }
                 case "look":
                     progress("Looking…")
-                    if let app = NSWorkspace.shared.frontmostApplication, let img = try? await ScreenReader.windowImage(app), let jpg = jpeg(img) {
+                    // Same masking as screen memory: what you typed and sensitive fields never leave as pixels.
+                    if let app = NSWorkspace.shared.frontmostApplication, let shot = try? await ScreenReader.windowCapture(app),
+                       let jpg = jpeg(ScreenReader.mask(shot.image, window: shot.frame, fields: await ScreenReader.inputFrames(pid: app.processIdentifier))) {
                         images.append(jpg)
                         result = #"{"ok":true,"note":"screenshot of the front window attached"}"#
                     } else { result = #"{"ok":false,"error":"no screenshot (Screen Recording permission?)"}"# }
