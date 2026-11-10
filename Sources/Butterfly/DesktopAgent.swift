@@ -93,6 +93,9 @@ enum DesktopAgent {
             ["name": "open_url",
              "description": "Open a URL in the default browser (web searches, sites, deep links). URL-encode queries.",
              "parameters": ["type": "object", "properties": ["url": ["type": "string"]], "required": ["url"]]],
+            ["name": "web_answer",
+             "description": "Answer a general question from the web (Google Search): facts, news, weather, prices, how-tos, definitions. Returns a short answer. No app opens.",
+             "parameters": ["type": "object", "properties": ["question": ["type": "string", "description": "The question, self-contained (resolve 'here', 'tomorrow' to concrete places and dates)."]], "required": ["question"]]],
             ["name": "look",
              "description": "Screenshot of the front window, for when the accessibility tree is empty or unclear (web pages, canvases, images).",
              "parameters": ["type": "object", "properties": [:]]],
@@ -119,6 +122,27 @@ enum DesktopAgent {
                 "required": ["summary"]]],
         ],
     ]]
+
+    // MARK: Web
+
+    /// One grounded Gemini call (Google Search). Kept apart from the tool loop: search grounding and
+    /// forced function calling don't mix in one request.
+    private static func webAnswer(_ question: String, key: String) async -> String {
+        let f = DateFormatter(); f.dateFormat = "EEEE, yyyy-MM-dd HH:mm"
+        let body: [String: Any] = [
+            "systemInstruction": ["parts": [["text": "Answer in 1–2 short sentences for a voice assistant's notch. Facts first, no preamble, no links. Now: \(f.string(from: Date())), user's time zone \(TimeZone.current.identifier)."]]],
+            "contents": [["role": "user", "parts": [["text": question]]]],
+            "tools": [["google_search": [:]]],
+            "generationConfig": ["temperature": 0.2],
+        ]
+        do {
+            let d = try await MeetingTranscriber.request("POST", "/v1beta/models/\(model):generateContent", key: key, json: body, timeout: 30)
+            let parts = ((d["candidates"] as? [[String: Any]])?.first?["content"] as? [String: Any])?["parts"] as? [[String: Any]] ?? []
+            let text = parts.compactMap { $0["text"] as? String }.joined().trimmingCharacters(in: .whitespacesAndNewlines)
+            log("web: \(question) → \(text.prefix(200))")
+            return text.isEmpty ? #"{"ok":false,"error":"no answer"}"# : text
+        } catch { return #"{"ok":false,"error":"search failed"}"# }
+    }
 
     // MARK: Run
 
@@ -152,6 +176,8 @@ enum DesktopAgent {
         3–6 goals for a short period, 5–10 for a multi-day one, covering every day, time order. Leave out idle \
         browsing under ~10 minutes unless it was most of the period. If they want it written somewhere, \
         `type_text` the summary instead.
+        - General questions that need no app (facts, news, weather, prices, how-tos) → `web_answer`, then `finish` with \
+        its `answer`. Don't open apps or browsers for them unless asked.
         - Questions about what's on screen now → `look` or a snapshot, then `finish` with `answer`.
         - If it can't be done, `finish` with `answer` saying why in one sentence.
 
@@ -223,6 +249,9 @@ enum DesktopAgent {
                         try? await Task.sleep(for: .milliseconds(1200))
                         result = #"{"ok":true}"#
                     } else { result = #"{"ok":false,"error":"bad url"}"# }
+                case "web_answer":
+                    progress("Searching…")
+                    result = await webAnswer(args["question"] as? String ?? request, key: key)
                 case "look":
                     progress("Looking…")
                     // Same masking as screen memory: what you typed and sensitive fields never leave as pixels.
