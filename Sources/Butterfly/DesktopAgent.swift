@@ -109,6 +109,7 @@ enum DesktopAgent {
              "parameters": ["type": "object", "properties": [
                 "summary": ["type": "string", "description": "3-6 words of what was done, e.g. 'Sent the message to Ana'."],
                 "answer": ["type": "string", "description": "Text to show the user, when they asked a question. Short."],
+                "keep_open": ["type": "boolean", "description": "Apps you launched get closed after an answer. Set true only when the user asked to open/show/start an app or a document, or to write or do something in it they'll keep using ('open Calculator', 'start a note'). 'Use X to work out…' → false."],
                 "recap": ["type": "object", "description": "Only for 'what did I do' questions: the GOALS the user worked toward, as a timeline.",
                           "properties": [
                             "title": ["type": "string", "description": "2-3 words, e.g. 'This week', 'Yesterday'"],
@@ -122,6 +123,18 @@ enum DesktopAgent {
                 "required": ["summary"]]],
         ],
     ]]
+
+    // MARK: Cleanup
+
+    /// Quits regular apps that weren't running when the request started. `terminate()` is the polite quit:
+    /// an app with unsaved work still asks.
+    private static func closeLaunched(since before: Set<pid_t>) {
+        for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular
+            && !before.contains(app.processIdentifier) && app.bundleIdentifier != Bundle.main.bundleIdentifier {
+            log("closing \(app.localizedName ?? "?") (opened for this answer)")
+            app.terminate()
+        }
+    }
 
     // MARK: Web
 
@@ -189,6 +202,8 @@ enum DesktopAgent {
         // A session with the visible agent cursor, started on the first desktop action: web answers and
         // memory questions never show a cursor.
         var session: String?, sessionTried = false
+        // Apps running before we start: anything new was launched by the agent.
+        let before = Set(NSWorkspace.shared.runningApplications.map(\.processIdentifier))
         defer { if let id = session { Task.detached { _ = await cli(["session", "end", id]) } } }
         for _ in 0..<maxTurns {
             try Task.checkCancellation()
@@ -225,6 +240,7 @@ enum DesktopAgent {
                                        apps: ($0["apps"] as? [String]) ?? [], minutes: ($0["minutes"] as? NSNumber)?.intValue) })
                     }
                     let answer = (args["answer"] as? String).flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+                    if args["keep_open"] as? Bool != true, answer != nil || recap != nil { closeLaunched(since: before) }
                     return Outcome(summary: args["summary"] as? String ?? "Done", answer: answer, recap: recap)
                 case "desktop":
                     var a = (args["args"] as? [String]) ?? []
