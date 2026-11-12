@@ -131,7 +131,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var recordItem: NSMenuItem?
 
     @objc private func toggleRecording() { Meetings.shared.toggle() }
-    @objc private func openMeetings() { Meetings.openFolder() }
+    @objc private func openMeetings() {
+        UserDefaults.standard.set("meetings", forKey: "settingsPane")
+        openSettingsWindow()
+    }
 
     @objc private func openSettingsWindow() {
         // The status menu is still tracking when this runs: open on the next turn.

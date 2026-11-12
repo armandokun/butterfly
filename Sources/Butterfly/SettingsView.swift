@@ -193,16 +193,83 @@ private struct MeetingsPane: View {
                     InkToggle(isOn: $ask)
                 }
             }
-            CardSection(title: "Transcripts", footer: "Gemini writes them, in Lithuanian or English. Saved in Documents › Butterfly Meetings (menu bar icon → Meeting Notes).") {
+            CardSection(title: "Transcripts", footer: "Gemini writes them, in Lithuanian or English. Saved in Documents › Butterfly Meetings.") {
                 if Keychain.geminiKey == nil {
                     CardRow(title: "Needs a Gemini API key") {
                         Button("Add Key") { pane = "keys" }.buttonStyle(.puffyInk)
                     }
                 }
-                CardRow(title: "Last meeting", last: true) {
-                    Button("Transcribe Again") { Meetings.shared.retranscribeLast() }.buttonStyle(.puffy)
+                CardRow(title: "Folder", last: true) {
+                    Button("Open") { Meetings.openFolder() }.buttonStyle(.puffy)
                 }
             }
+            let shown = showAll ? recordings : Array(recordings.prefix(10))
+            VStack(alignment: .leading, spacing: 10) {
+                CardSection(title: "Recordings", footer: recordings.isEmpty ? "No recordings yet." : nil) {
+                    ForEach(shown.indices, id: \.self) { i in
+                        RecordingRow(rec: shown[i], busy: busy.contains(shown[i].id), last: i == shown.count - 1,
+                                     canTranscribe: Keychain.geminiKey != nil) { retranscribe(shown[i]) }
+                    }
+                }
+                if recordings.count > shown.count {
+                    Button("Show all (\(recordings.count))") { showAll = true }.buttonStyle(.puffy)
+                }
+            }
+        }
+        .onAppear(perform: reload)
+    }
+
+    @State private var recordings: [Meetings.Recording] = []
+    @State private var busy: Set<String> = []
+    @State private var showAll = false
+
+    private func reload() { recordings = Meetings.recordings() }
+
+    private func retranscribe(_ r: Meetings.Recording) {
+        busy.insert(r.id)
+        Meetings.shared.retranscribeLast(folder: r.folder) { _ in
+            busy.remove(r.id)
+            reload()
+        }
+    }
+}
+
+/// One recording: title, when, transcript status, and Transcribe Again.
+private struct RecordingRow: View {
+    let rec: Meetings.Recording
+    let busy: Bool, last: Bool, canTranscribe: Bool
+    let retranscribe: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(rec.title).font(Design.body).foregroundStyle(Design.ink).lineLimit(1).truncationMode(.tail)
+                    Text(rec.date?.formatted(date: .abbreviated, time: .shortened) ?? rec.name).secondaryText(.system(size: 11.5))
+                }
+                Spacer(minLength: 12)
+                if rec.status == .failed && !busy { Tag(text: "Failed", tint: Design.pink) }
+                if busy { ProgressView().controlSize(.small).frame(width: 34) }
+                else if rec.status != .done {
+                    Button(rec.status == .failed ? "Transcribe Again" : "Transcribe", action: retranscribe).buttonStyle(.puffy).disabled(!canTranscribe)
+                } else {
+                    Button("Open") { NSWorkspace.shared.open(rec.folder.appendingPathComponent("transcript.md")) }.buttonStyle(.puffy)
+                    Menu {
+                        Button("Transcribe Again", action: retranscribe).disabled(!canTranscribe)
+                        Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([rec.folder]) }
+                    } label: {
+                        Image(systemName: "ellipsis").rotationEffect(.degrees(90))
+                            .font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Design.ink)
+                            .frame(width: 30, height: 30)
+                            .contentShape(Circle())
+                            .glassEffect(.regular.interactive(), in: .circle)
+                    }
+                        .menuStyle(.button).menuIndicator(.hidden).buttonStyle(.plain).fixedSize()
+                        .help("More")
+                }
+            }
+            .padding(.horizontal, Design.pad).frame(minHeight: 52)
+            if !last { Rectangle().fill(Design.hairline).frame(height: 1).padding(.leading, Design.pad) }
         }
     }
 }

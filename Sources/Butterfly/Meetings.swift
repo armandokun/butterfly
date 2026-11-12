@@ -284,12 +284,13 @@ final class Meetings {
     }
 
     /// Re-run Gemini on the newest recording (after adding a key, or if it failed).
-    func retranscribeLast(folder: URL? = nil) {
+    /// `done` gets the folder after any rename (nil on failure).
+    func retranscribeLast(folder: URL? = nil, done: ((URL?) -> Void)? = nil) {
         let fm = FileManager.default
         guard let dirs = try? fm.contentsOfDirectory(at: Self.root, includingPropertiesForKeys: [.creationDateKey]),
               let last = folder ?? dirs.filter({ fm.fileExists(atPath: $0.appendingPathComponent("meeting.m4a").path) })
                   .max(by: { $0.lastPathComponent < $1.lastPathComponent }),
-              let key = Keychain.geminiKey else { emit(.failed("No recording or no Gemini key")); return }
+              let key = Keychain.geminiKey else { emit(.failed("No recording or no Gemini key")); done?(nil); return }
         let transcript = last.appendingPathComponent("transcript.md")
         let old = (try? String(contentsOf: transcript, encoding: .utf8)) ?? ""
         let header = old.components(separatedBy: "\n\n\n").first.map { $0 + "\n\n\n" } ?? ""
@@ -303,8 +304,37 @@ final class Meetings {
                 try (header + text + "\n").write(to: transcript, atomically: true, encoding: .utf8)
                 let (named, finalTitle) = Self.appNames.contains(title) ? await Self.titleFromTranscript(last, text: text, key: key) : (last, title)
                 emit(.saved(title: finalTitle, folder: named))
-            } catch { emit(.failed(error.localizedDescription)) }
+                done?(named)
+            } catch { emit(.failed(error.localizedDescription)); done?(nil) }
         }
+    }
+
+    /// A saved recording, for the Settings list.
+    struct Recording: Identifiable {
+        let folder: URL
+        var id: String { folder.path }
+        var name: String { folder.lastPathComponent }
+        var title: String { name.count > 17 ? String(name.dropFirst(17)) : name }
+        /// "2026-10-29 13.00" → date.
+        var date: Date? { try? Date(String(name.prefix(16)), strategy: Date.ParseStrategy(format: "\(year: .defaultDigits)-\(month: .twoDigits)-\(day: .twoDigits) \(hour: .twoDigits(clock: .twentyFourHour, hourCycle: .zeroBased)).\(minute: .twoDigits)", timeZone: .current)) }
+        enum Status { case done, failed, missing }
+        let status: Status
+        init(folder: URL) {
+            self.folder = folder
+            let md = (try? FileHandle(forReadingFrom: folder.appendingPathComponent("transcript.md")))
+                .flatMap { h in defer { try? h.close() }; return try? h.read(upToCount: 2048) }   // the failure note sits right under the header
+                .map { String(decoding: $0, as: UTF8.self) }
+            status = md == nil ? .missing : md!.contains("_Transcription failed") || md!.contains("_No Gemini API key") ? .failed : .done
+        }
+    }
+
+    /// Every recording with audio, newest first.
+    static func recordings() -> [Recording] {
+        let fm = FileManager.default
+        let dirs = (try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
+        return dirs.filter { fm.fileExists(atPath: $0.appendingPathComponent("meeting.m4a").path) }
+            .sorted { $0.lastPathComponent > $1.lastPathComponent }
+            .map(Recording.init)
     }
 
     /// Who's on the mic track: the Mac's account name.
