@@ -239,6 +239,7 @@ private struct RecordingRow: View {
     let rec: Meetings.Recording
     let busy: Bool, last: Bool, canTranscribe: Bool
     let retranscribe: () -> Void
+    @State private var showWhy = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -248,7 +249,16 @@ private struct RecordingRow: View {
                     Text(rec.date?.formatted(date: .abbreviated, time: .shortened) ?? rec.name).secondaryText(.system(size: 11.5))
                 }
                 Spacer(minLength: 12)
-                if rec.status == .failed && !busy { Tag(text: "Failed", tint: Design.pink) }
+                if rec.status == .failed && !busy {
+                    Button { showWhy.toggle() } label: { Tag(text: "Failed", tint: Design.pink) }
+                        .buttonStyle(.plain).help("Why it failed")
+                        .popover(isPresented: $showWhy, arrowEdge: .bottom) {
+                            Text(rec.reason ?? "No details.")
+                                .font(.system(size: 12)).foregroundStyle(Design.ink).textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(width: 320, alignment: .leading).padding(14)
+                        }
+                }
                 if busy { ProgressView().controlSize(.small).frame(width: 34) }
                 else if rec.status != .done {
                     Button(rec.status == .failed ? "Transcribe Again" : "Transcribe", action: retranscribe).buttonStyle(.puffy).disabled(!canTranscribe)

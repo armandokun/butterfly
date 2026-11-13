@@ -1,6 +1,7 @@
 import AppKit
 import CoreAudio
 import EventKit
+import Network
 
 /// Recall-style meeting notes without a bot: when a call app uses the mic, Butterfly records the call
 /// (what you hear + your mic), then Gemini writes the transcript. Saved in ~/Documents/Butterfly Meetings.
@@ -59,6 +60,61 @@ final class Meetings {
     func start() {
         ticker = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { _ in
             MainActor.assumeIsolated { Meetings.shared.tick() }
+        }
+        // Self-recovery: transcripts that failed (lid closed, Wi-Fi dropped, app quit mid-way) are retried on their own.
+        retryTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in
+            MainActor.assumeIsolated { Meetings.shared.retryFailed() }
+        }
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
+            // Give Wi-Fi a moment to come back, then retry right away (skip the backoff wait).
+            DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
+                MainActor.assumeIsolated { Meetings.shared.retryFailed(now: true) }
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+            MainActor.assumeIsolated { Meetings.shared.retryFailed() }
+        }
+        // Back online: retry now instead of waiting for the next scheduled try.
+        net.pathUpdateHandler = { path in
+            let up = path.status == .satisfied
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    let m = Meetings.shared
+                    let cameBack = up && !m.online
+                    m.online = up
+                    if cameBack { Self.log("network back"); m.retryFailed(now: true) }
+                }
+            }
+        }
+        net.start(queue: .global(qos: .utility))
+    }
+
+    private let net = NWPathMonitor()
+    private var online = true
+
+    // MARK: self-recovery
+
+    private var retryTimer: Timer?
+    /// Recordings being transcribed right now (their transcript.md is missing until it's done).
+    private var inFlight: Set<String> = []
+    /// Auto-retries per recording: how many so far and when the next one is due.
+    private var retries: [String: (count: Int, next: Date)] = [:]
+    /// Wait before each retry: 1, 5, 15, 30 min, 1 h, 3 h. Then it stays failed (Settings › Transcribe still works).
+    static let retryDelays: [TimeInterval] = [60, 300, 900, 1800, 3600, 3 * 3600]
+
+    /// Re-transcribes recordings from the last 3 days whose transcript failed or never got written.
+    func retryFailed(now force: Bool = false) {
+        guard Keychain.geminiKey != nil, online else { return }   // offline: don't burn attempts, the path monitor calls back
+        let now = Date()
+        for r in Self.recordings().prefix(30) where r.status != .done {
+            let id = r.folder.path
+            guard let d = r.date, now.timeIntervalSince(d) < 3 * 86400,
+                  !inFlight.contains(id), session?.recorder.folder.path != id else { continue }
+            let st = retries[id] ?? (0, .distantPast)
+            guard st.count < Self.retryDelays.count, force || now >= st.next else { continue }
+            retries[id] = (st.count + 1, now.addingTimeInterval(Self.retryDelays[st.count]))
+            Self.log("auto-retry \(st.count + 1)/\(Self.retryDelays.count): \(r.name)")
+            retranscribeLast(folder: r.folder, quiet: true)
         }
     }
 
@@ -266,6 +322,8 @@ final class Meetings {
 
         """
         let transcript = folder.appendingPathComponent("transcript.md")
+        inFlight.insert(folder.path)
+        defer { inFlight.remove(folder.path) }
         do {
             let audio = try await s.recorder.stop()
             guard let key = Keychain.geminiKey else {
@@ -278,34 +336,52 @@ final class Meetings {
             let (named, finalTitle) = s.event == nil ? await Self.titleFromTranscript(folder, text: text, key: key) : (folder, title)
             emit(.saved(title: finalTitle, folder: named))
         } catch {
-            try? (header + "_Transcription failed: \(error.localizedDescription)_\n").write(to: transcript, atomically: true, encoding: .utf8)
-            emit(.failed(error.localizedDescription))
+            try? (header + "_Transcription failed: \(error.localizedDescription)_\n\n_Butterfly retries on its own (next try in 1 min)._\n").write(to: transcript, atomically: true, encoding: .utf8)
+            retries[folder.path] = (0, Date().addingTimeInterval(Self.retryDelays[0]))
+            emit(.failed("Transcript failed, retrying in 1 min"))
         }
     }
 
     /// Re-run Gemini on the newest recording (after adding a key, or if it failed).
-    /// `done` gets the folder after any rename (nil on failure).
-    func retranscribeLast(folder: URL? = nil, done: ((URL?) -> Void)? = nil) {
+    /// `done` gets the folder after any rename (nil on failure). `quiet`: an auto-retry, no notch alert if it fails again.
+    func retranscribeLast(folder: URL? = nil, quiet: Bool = false, done: ((URL?) -> Void)? = nil) {
         let fm = FileManager.default
         guard let dirs = try? fm.contentsOfDirectory(at: Self.root, includingPropertiesForKeys: [.creationDateKey]),
               let last = folder ?? dirs.filter({ fm.fileExists(atPath: $0.appendingPathComponent("meeting.m4a").path) })
                   .max(by: { $0.lastPathComponent < $1.lastPathComponent }),
               let key = Keychain.geminiKey else { emit(.failed("No recording or no Gemini key")); done?(nil); return }
         let transcript = last.appendingPathComponent("transcript.md")
+        let id = last.path
+        guard !inFlight.contains(id) else { done?(nil); return }   // already being transcribed
         let old = (try? String(contentsOf: transcript, encoding: .utf8)) ?? ""
-        let header = old.components(separatedBy: "\n\n\n").first.map { $0 + "\n\n\n" } ?? ""
+        let header = Self.split(old).header
         let title = String(last.lastPathComponent.dropFirst(17))
+        inFlight.insert(id)
         Task {
+            defer { inFlight.remove(id) }
             do {
                 let me = last.appendingPathComponent("me.m4a"), them = last.appendingPathComponent("them.m4a")
                 let both = fm.fileExists(atPath: me.path) && fm.fileExists(atPath: them.path)
                 let text = try await MeetingTranscriber.transcribe(.init(mixed: last.appendingPathComponent("meeting.m4a"), sides: both ? (me, them) : nil),
                                                                    title: title, attendees: [], me: Self.myName, key: key)
                 try (header + text + "\n").write(to: transcript, atomically: true, encoding: .utf8)
+                retries[id] = nil
                 let (named, finalTitle) = Self.appNames.contains(title) ? await Self.titleFromTranscript(last, text: text, key: key) : (last, title)
                 emit(.saved(title: finalTitle, folder: named))
                 done?(named)
-            } catch { emit(.failed(error.localizedDescription)); done?(nil) }
+            } catch {
+                // Network dropped mid-try: that attempt doesn't count.
+                let msg = error.localizedDescription
+                if !online || error is URLError || ["network connection", "offline", "timed out", "Internet connection"].contains(where: msg.contains),
+                   let r = retries[id], r.count > 0 { retries[id] = (r.count - 1, r.next) }
+                let left = retries[id].map { $0.count < Self.retryDelays.count } ?? false
+                let next = !online ? "\n\n_Butterfly retries on its own when you're back online._"
+                    : left ? "\n\n_Butterfly retries on its own (next try \(retries[id]!.next.formatted(date: .omitted, time: .shortened)))._" : ""
+                try? (header + "_Transcription failed: \(error.localizedDescription)_\(next)\n").write(to: transcript, atomically: true, encoding: .utf8)
+                Self.log("transcribe failed: \(last.lastPathComponent): \(error.localizedDescription)")
+                if !quiet { emit(.failed(error.localizedDescription)) }
+                done?(nil)
+            }
         }
     }
 
@@ -322,10 +398,27 @@ final class Meetings {
         init(folder: URL) {
             self.folder = folder
             let md = (try? FileHandle(forReadingFrom: folder.appendingPathComponent("transcript.md")))
-                .flatMap { h in defer { try? h.close() }; return try? h.read(upToCount: 2048) }   // the failure note sits right under the header
+                .flatMap { h in defer { try? h.close() }; return try? h.read(upToCount: 4096) }   // the failure note sits right under the header
                 .map { String(decoding: $0, as: UTF8.self) }
-            status = md == nil ? .missing : md!.contains("_Transcription failed") || md!.contains("_No Gemini API key") ? .failed : .done
+            // Only the note right under the header counts: a transcript that merely mentions "failed" is fine.
+            let body = md.map { Meetings.split($0).body.trimmingCharacters(in: .whitespacesAndNewlines) }
+            let empty = body?.isEmpty ?? false   // header only (cut off mid-write)
+            let noKey = body?.hasPrefix("_No Gemini API key") ?? false
+            status = body == nil ? .missing : empty || noKey || body!.hasPrefix("_Transcription failed") ? .failed : .done
+            reason = status != .failed ? nil
+                : noKey ? "No Gemini API key. Add one under API Keys."
+                : empty ? "The transcript is empty: it was cut off before Gemini finished."
+                : body!.components(separatedBy: "\n").filter { $0.hasPrefix("_Transcription failed") || $0.hasPrefix("_Butterfly retries") }
+                    .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "_")) }.joined(separator: "\n\n")
         }
+        /// Why it failed (and when the next auto-retry is), from the note in transcript.md.
+        let reason: String?
+    }
+
+    /// transcript.md → the "# title / date / attendees" block (with its blank line) and everything under it.
+    nonisolated static func split(_ md: String) -> (header: String, body: String) {
+        guard md.hasPrefix("# "), let r = md.range(of: "\n\n") else { return ("", md) }
+        return (String(md[..<r.upperBound]), String(md[r.upperBound...]))
     }
 
     /// Every recording with audio, newest first.
@@ -372,8 +465,8 @@ final class Meetings {
         Task.detached(priority: .background) {
             for d in dirs where appNames.contains(String(d.lastPathComponent.dropFirst(17))) {
                 let md = d.appendingPathComponent("transcript.md")
-                guard let text = try? String(contentsOf: md, encoding: .utf8), !text.contains("_Transcription failed"), !text.contains("_No Gemini API key") else { continue }
-                let body = text.range(of: "\n\n").map { String(text[$0.upperBound...]) } ?? text   // after the header block
+                guard let text = try? String(contentsOf: md, encoding: .utf8), Recording(folder: d).status == .done else { continue }
+                let body = split(text).body
                 _ = await titleFromTranscript(d, text: body, key: key)
             }
         }
