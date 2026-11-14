@@ -8,20 +8,15 @@ final class NotchModel: ObservableObject {
     enum Phase: Equatable {
         case idle
         case listening
-        case thinking
         case system(symbol: String, title: String, detail: String?)
         case message(String)
         case badge(symbol: String, text: String, tint: Color)   // compact: icon left, short text right
-        case answer(title: String, text: String)                // expanded, a few lines
-        case recap(title: String, range: String, items: [RecapItem])   // expanded, "what did I do" timeline
         case meetingPrompt(app: String)                         // expanded: "Record this meeting?" with buttons
         case recordingCard                                      // expanded on hover while recording: time + Stop
         case transcriptReady(title: String, file: URL)          // expanded: "Transcript ready" + Open
         case stopPrompt(app: String)                            // expanded: "Call ended?" · Keep / Stop
     }
     struct Recording: Equatable { let app: String; let since: Date }
-    /// One goal in a "what did I do" recap: when it started, what it was for, the apps used, time spent.
-    struct RecapItem: Equatable { let time: String; let goal: String; let apps: [String]; let minutes: Int? }
 
     /// A meeting is being recorded: the notch shows a red dot + time, hover to stop.
     @Published var recording: Recording? {
@@ -49,8 +44,6 @@ final class NotchModel: ObservableObject {
     }
     @Published var transcript = ""
     @Published var levels: [CGFloat] = Array(repeating: 0, count: 5)
-    /// Right ⌥: dictation only. What you say gets typed, nothing is interpreted.
-    @Published private(set) var dictationOnly = false
     @Published private(set) var isLocked = false
 
     private let recorder = SpeechRecorder()
@@ -59,8 +52,6 @@ final class NotchModel: ObservableObject {
     private var peakLevel: CGFloat = 0     // loudest sound this press: 0 = the mic heard nothing
     private var dismissTask: Task<Void, Never>?
     private var startTask: Task<Void, Never>?
-    private var requestTask: Task<Void, Never>?
-    private var requestGen = 0
 
     init() {
         recorder.onPartial = { [weak self] text in
@@ -112,10 +103,10 @@ final class NotchModel: ObservableObject {
         Meetings.nameUntitledFolders()
     }
 
-    /// Must-see events (meeting recording): shown over anything except you talking to Butterfly,
+    /// Must-see events (meeting recording): shown over anything except you dictating,
     /// in which case it waits (up to 30 s) until you're done.
     func notify(_ p: Phase, for seconds: Double, waited: Int = 0) {
-        if phase == .listening || phase == .thinking, waited < 30 {
+        if phase == .listening, waited < 30 {
             Task { try? await Task.sleep(for: .seconds(1)); notify(p, for: seconds, waited: waited + 1) }
             return
         }
@@ -186,18 +177,13 @@ final class NotchModel: ObservableObject {
         }
     }
 
-    // MARK: Hotkey events
+    // MARK: Dictation (hold ⌥: what you say gets typed)
 
     /// ⌥ went down: start the mic during the hold delay; cancelled if it was a shortcut.
-    func arm() {
-        cancelRequestIfRunning()   // ⌥ again while a request runs: that one's dropped (tap = just cancel)
-        recorder.arm()
-    }
+    func arm() { recorder.arm() }
     func disarm() { recorder.disarm() }
 
-    func begin(dictation: Bool = false) {
-        cancelRequestIfRunning()
-        dictationOnly = dictation
+    func begin() {
         dismissTask?.cancel()
         moveToActiveScreen()
         transcript = ""
@@ -207,7 +193,6 @@ final class NotchModel: ObservableObject {
         Ducker.duck()
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
         frontApp = NSWorkspace.shared.frontmostApplication.flatMap { $0.bundleIdentifier == Bundle.main.bundleIdentifier ? nil : $0 }
-        if !dictation { DesktopAgent.warm(frontApp) }
         startTask = Task {
             do { try await recorder.start(onAudio: {}) }
             catch { show(.message("Mic error: \(error.localizedDescription)")) }
@@ -218,10 +203,7 @@ final class NotchModel: ObservableObject {
         guard phase == .listening, !isLocked else { return }
         Cues.stopped()
         Ducker.restore()
-        requestGen += 1
-        let gen = requestGen
-        requestTask = Task {
-            defer { if requestGen == gen { requestTask = nil } }
+        Task {
             await startTask?.value
             let text = await recorder.stop()
             let silent = peakLevel < 0.02
@@ -231,22 +213,15 @@ final class NotchModel: ObservableObject {
                 if silent { return show(.system(symbol: "mic.slash", title: "Heard nothing", detail: "Using \(recorder.micName ?? "no microphone") · change it in Settings"), for: 3) }
                 return close()
             }
-            if dictationOnly {
-                dictationOnly = false
-                close()
-                frontApp?.activate()
-                try? await Task.sleep(for: .milliseconds(80))
-                await Typer.type(text)
-                return
-            }
-            transcript = text
-            await handle(text)
+            close()
+            frontApp?.activate()
+            try? await Task.sleep(for: .milliseconds(80))
+            await Typer.type(text)
         }
     }
 
     func cancel() {
         guard !isLocked else { return }
-        dictationOnly = false
         Task {
             await startTask?.value
             await recorder.cancel()
@@ -255,36 +230,24 @@ final class NotchModel: ObservableObject {
         }
     }
 
-    /// ⌥ pressed while a request is running: stop it. Returns true when something was stopped.
-    @discardableResult
-    private func cancelRequestIfRunning() -> Bool {
-        guard let requestTask, !requestTask.isCancelled, !isLocked else { return false }
-        requestTask.cancel()
-        self.requestTask = nil
-        NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
-        show(.system(symbol: "xmark", title: "Cancelled", detail: nil), for: 0.9)
-        return true
-    }
-
-    // MARK: Locked mode (⌥⇧): keep listening, run each sentence when you pause
+    // MARK: Locked mode (⌥⇧): keep listening, type each sentence when you pause
 
     private var accepting = false          // still taking sentences (true until the mic fully stops)
     private var queue: [String] = []
     private var working = false
 
-    func lock(dictation: Bool = false) {
+    func lock() {
         guard !isLocked else { return }
         isLocked = true
         accepting = true
         typedInDictation = false
-        if phase != .listening { begin(dictation: dictation) } else { dismissTask?.cancel(); if dictation { dictationOnly = true } }
+        if phase != .listening { begin() } else { dismissTask?.cancel() }
         NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
     }
 
     func unlock() {
         guard isLocked else { return }
         isLocked = false
-        dictationOnly = false
         Cues.stopped()
         Ducker.restore()
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
@@ -308,55 +271,13 @@ final class NotchModel: ObservableObject {
             while !queue.isEmpty {
                 let next = queue.removeFirst()
                 if next.lowercased().firstMatch(of: Self.stopPhrase) != nil { unlock(); continue }
-                if dictationOnly {
-                    frontApp?.activate()
-                    await Typer.type((typedInDictation ? " " : "") + next)
-                    typedInDictation = true
-                    transcript = ""
-                    continue
-                }
-                dismissTask?.cancel()
-                transcript = next
-                frontApp = NSWorkspace.shared.frontmostApplication.flatMap { $0.bundleIdentifier == Bundle.main.bundleIdentifier ? nil : $0 } ?? frontApp
-                await handle(next)
-                try? await Task.sleep(for: .milliseconds(queue.isEmpty ? 0 : 700))
+                frontApp?.activate()
+                await Typer.type((typedInDictation ? " " : "") + next)
+                typedInDictation = true
+                transcript = ""
             }
             working = false
             if !accepting { close() }
-        }
-    }
-
-    // MARK: The agent
-
-    /// BUTTERFLY_SAY: as if spoken, on the app in front.
-    func say(_ text: String) {
-        frontApp = NSWorkspace.shared.frontmostApplication.flatMap { $0.bundleIdentifier == Bundle.main.bundleIdentifier ? nil : $0 }
-        transcript = text
-        DesktopAgent.warm(frontApp)
-        // As if spoken: the request arrives after you've talked for a bit (BUTTERFLY_SAY_DELAY seconds).
-        let delay = Double(ProcessInfo.processInfo.environment["BUTTERFLY_SAY_DELAY"] ?? "") ?? 0
-        requestTask = Task { try? await Task.sleep(for: .seconds(delay)); await handle(text) }
-    }
-
-    private func handle(_ text: String) async {
-        guard let key = Keychain.geminiKey else { return show(.message("Add a Gemini key in Settings"), for: 3) }
-        phase = .thinking
-        frontApp?.activate()   // the agent works on what you were looking at, not the notch
-        do {
-            let r = try await DesktopAgent.run(text, front: frontApp, key: key) { [weak self] line in
-                self?.show(.system(symbol: "sparkles", title: line, detail: text), for: 60)
-            }
-            if let recap = r.recap {
-                let items = recap.items.map { RecapItem(time: $0.time, goal: $0.goal, apps: $0.apps, minutes: $0.minutes) }
-                return show(.recap(title: recap.title, range: recap.range, items: items), for: 4 + Double(items.count) * 1.5)
-            }
-            if let a = r.answer {
-                return show(.answer(title: r.summary, text: a), for: min(20, max(6, Double(a.split(separator: " ").count) / 3)))
-            }
-            show(.system(symbol: "checkmark", title: r.summary, detail: nil), for: 2.2)
-        } catch {
-            if Task.isCancelled { return }
-            show(.message(error.localizedDescription), for: 3.5)
         }
     }
 
@@ -389,7 +310,7 @@ final class NotchModel: ObservableObject {
     /// Swipe up (or sideways) on the notch: put away whatever it's showing. Listening isn't interrupted.
     func swipeAway() {
         switch phase {
-        case .idle, .listening, .thinking: return
+        case .idle, .listening: return
         default:
             dismissTask?.cancel()
             close()

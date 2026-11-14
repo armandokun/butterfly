@@ -46,8 +46,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         if ProcessInfo.processInfo.environment["BUTTERFLY_DEBUG"] == "1" { setlinebuf(stdout) }
         if Installer.offerMoveToApplications() { return }
-        AppCatalog.shared.reload()
-        ScreenMemory.shared.start()
 
         let panel = NotchPanel(rootView: NotchView(model: model))
         panel.orderFrontRegardless()
@@ -57,12 +55,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.onHover = { [weak self] over in self?.model.hover(over) }
         panel.onSwipeAway { [weak self] in self?.model.swipeAway() }
 
-        hotkey.onBegin = { [weak self] dictation in self?.model.begin(dictation: dictation) }
+        hotkey.onBegin = { [weak self] in self?.model.begin() }
         hotkey.onArm = { [weak self] in self?.model.arm() }
         hotkey.onDisarm = { [weak self] in self?.model.disarm() }
         hotkey.onEnd = { [weak self] in self?.model.end() }
         hotkey.onCancel = { [weak self] in self?.model.cancel() }
-        hotkey.onLock = { [weak self] dictation in self?.model.lock(dictation: dictation) }
+        hotkey.onLock = { [weak self] in self?.model.lock() }
         hotkey.onUnlock = { [weak self] in self?.model.unlock() }
         hotkey.start()
         model.startObservers()
@@ -79,9 +77,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if ProcessInfo.processInfo.environment["BUTTERFLY_RECORDING_STATES"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.model.recordingStatesDemo() }
-        }
-        if let say = ProcessInfo.processInfo.environment["BUTTERFLY_SAY"] {   // run the agent on this sentence, as if spoken
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.model.say(say) }
         }
         if !HotkeyMonitor.hasAccessibility { HotkeyMonitor.promptForAccessibility() }
         Task {

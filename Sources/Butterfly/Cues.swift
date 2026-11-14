@@ -68,3 +68,18 @@ enum Ducker {
 
     private static func osaVolume(_ v: Int) -> Int { SystemAudio.setVolume(v) }
 }
+
+/// System output volume (for ducking music while you talk).
+@MainActor
+enum SystemAudio {
+    static var volume: Int { Int(osa("output volume of (get volume settings)") ?? "") ?? 50 }
+    @discardableResult static func setVolume(_ v: Int) -> Int {
+        let v = min(100, max(0, v))
+        _ = osa("set volume output volume \(v) without output muted")
+        return v
+    }
+    private static func osa(_ source: String) -> String? {
+        var err: NSDictionary?
+        return NSAppleScript(source: source)?.executeAndReturnError(&err).stringValue
+    }
+}

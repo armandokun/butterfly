@@ -41,14 +41,10 @@ targets:
         SUPublicEDKey: USw1KgVHkB/jXNnMT/bvnUtfRp9Ouda3GTyoCHjs+Po=
         SUEnableAutomaticChecks: true
         LSUIElement: true
-        NSMicrophoneUsageDescription: Butterfly listens while you hold Option so it can understand your command.
-        NSSpeechRecognitionUsageDescription: Butterfly transcribes your voice on-device to understand your command.
-        NSAppleEventsUsageDescription: Butterfly opens websites in new browser windows so it can place them side by side.
-        NSBluetoothAlwaysUsageDescription: Butterfly connects your Bluetooth devices by voice and shows their battery in the notch.
-        NSLocationUsageDescription: macOS only shares the Wi-Fi network name with apps that have Location access. Butterfly uses it to show which network you joined.
-        NSLocationWhenInUseUsageDescription: macOS only shares the Wi-Fi network name with apps that have Location access. Butterfly uses it to show which network you joined.
-        NSCalendarsFullAccessUsageDescription: Butterfly adds events and reads your agenda when you ask by voice.
-        NSRemindersFullAccessUsageDescription: Butterfly creates reminders when you ask by voice.
+        NSMicrophoneUsageDescription: Butterfly records your mic during meetings and while you hold Option to dictate.
+        NSSpeechRecognitionUsageDescription: Butterfly transcribes your dictation on-device.
+        NSAppleEventsUsageDescription: Butterfly lowers music volume while you dictate.
+        NSCalendarsFullAccessUsageDescription: Butterfly names meeting recordings after your calendar events.
     entitlements:
       path: Resources/Butterfly.entitlements
       properties:

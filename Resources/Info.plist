@@ -23,21 +23,13 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>Butterfly opens websites in new browser windows so it can place them side by side.</string>
-	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Butterfly connects your Bluetooth devices by voice and shows their battery in the notch.</string>
+	<string>Butterfly lowers music volume while you dictate.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
-	<string>Butterfly adds events and reads your agenda when you ask by voice.</string>
-	<key>NSLocationUsageDescription</key>
-	<string>macOS only shares the Wi-Fi network name with apps that have Location access. Butterfly uses it to show which network you joined.</string>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>macOS only shares the Wi-Fi network name with apps that have Location access. Butterfly uses it to show which network you joined.</string>
+	<string>Butterfly names meeting recordings after your calendar events.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Butterfly listens while you hold Option so it can understand your command.</string>
-	<key>NSRemindersFullAccessUsageDescription</key>
-	<string>Butterfly creates reminders when you ask by voice.</string>
+	<string>Butterfly records your mic during meetings and while you hold Option to dictate.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Butterfly transcribes your voice on-device to understand your command.</string>
+	<string>Butterfly transcribes your dictation on-device.</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUFeedURL</key>

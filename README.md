@@ -1,22 +1,19 @@
 # Butterfly
 
-Voice control for your Mac, living in the notch. Hold ⌥ and speak: open apps and sites, arrange windows, control music, add events and reminders, type by voice, record and transcribe meetings.
+Meeting notes for your Mac, living in the notch. Records Zoom, Teams, Meet, Slack and FaceTime calls and writes the transcript. Hold right ⌥ to dictate anywhere.
 
 ## Install
 
 1. Download **[Butterfly.zip](https://github.com/armandokun/butterfly/releases/latest/download/Butterfly.zip)**.
 2. Unzip it and drag **Butterfly** to **Applications**.
 3. Open it. macOS says it can't check it for malicious software: click **Done**, then **System Settings → Privacy & Security → Open Anyway**. Only the first time.
-4. Allow Microphone and Accessibility when asked.
+4. Allow Microphone, Screen Recording (call audio) and Accessibility (dictation) when asked.
 
 Requires macOS 26 or later. Updates install automatically (or menu bar icon → **Check for Updates…**).
 
-## API keys
+## API key
 
-Paste these in **Settings** (menu bar icon → Settings…). They're stored in your Keychain.
-
-- **[TypeSafe](https://typesafe.ai)**: required for voice commands.
-- **[Gemini](https://aistudio.google.com/apikey)**: optional, for meeting transcripts and reading the screen.
+Paste a **[Gemini](https://aistudio.google.com/apikey)** key in **Settings** (menu bar icon → Settings…) for meeting transcripts. It's stored in your Keychain.
 
 ## Build from source
 

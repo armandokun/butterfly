@@ -175,12 +175,17 @@ struct CardSection<Content: View>: View {
 /// One row inside a card: label left, control right, hairline under.
 struct CardRow<Trailing: View>: View {
     let title: String
+    var subtitle: String? = nil
     var last = false
     @ViewBuilder var trailing: () -> Trailing
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text(title).font(Design.body).tracking(-0.15).foregroundStyle(Design.ink).lineLimit(1).fixedSize()
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(Design.body).tracking(-0.15).foregroundStyle(Design.ink).lineLimit(1).fixedSize()
+                    if let subtitle { Text(subtitle).secondaryText().lineLimit(1) }
+                }
+                .padding(.vertical, subtitle == nil ? 0 : 8)
                 Spacer(minLength: 12)
                 trailing()
             }

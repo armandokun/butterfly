@@ -1,24 +1,23 @@
 import AppKit
 import ApplicationServices
 
-/// Hold LEFT Option (alone) = push-to-talk command. Hold RIGHT Option = dictation only (words typed, no commands).
-/// Option + any other key (e.g. ⌥← or typing "©") cancels, so normal shortcuts keep working.
-/// Left Option + Shift = lock commands; Right Option + Shift = lock dictation. Tap Option to stop.
+/// Hold RIGHT Option (alone) = dictation: what you say gets typed. Left Option is left alone.
+/// Right Option + any other key (e.g. ⌥← or typing "©") cancels, so normal shortcuts keep working.
+/// Right Option + Shift = locked dictation (keeps typing each sentence). Tap right Option to stop.
 @MainActor
 final class HotkeyMonitor {
-    var onBegin: ((_ dictation: Bool) -> Void)?
+    var onBegin: (() -> Void)?
     var onArm: (() -> Void)?      // ⌥ just went down (before the hold delay): start the mic
     var onDisarm: (() -> Void)?   // …it was a shortcut or a tap after all
     var onEnd: (() -> Void)?
     var onCancel: (() -> Void)?
-    var onLock: ((_ dictation: Bool) -> Void)?
+    var onLock: (() -> Void)?
     var onUnlock: (() -> Void)?
 
     /// Short delay so quick ⌥-shortcuts never flash the notch.
     private let holdDelay: TimeInterval = 0.1
     private var pending: DispatchWorkItem?
     private var active = false
-    private var activeSide = false   // true: the right ⌥ (dictation) started it
     private var locked = false
     private var lockArmed = false   // every key released since locking; the next ⌥ tap unlocks
     private var monitors: [Any] = []
@@ -42,17 +41,15 @@ final class HotkeyMonitor {
     private func flagsChanged(_ event: NSEvent) {
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             .subtracting([.capsLock, .numericPad, .function])
-        // Left Option only: device-dependent bits 0x20 = left ⌥, 0x40 = right ⌥.
+        // Right Option only: device-dependent bits 0x20 = left ⌥, 0x40 = right ⌥.
         let raw = event.modifierFlags.rawValue
-        let leftOption = raw & 0x20 != 0 && raw & 0x40 == 0
         let rightOption = raw & 0x40 != 0 && raw & 0x20 == 0
-        let optionOnly = mods == .option && leftOption
         let rightOnly = mods == .option && rightOption
-        let lockCombo = mods == [.option, .shift] && (leftOption || rightOption)
+        let lockCombo = mods == [.option, .shift] && rightOption
 
         if locked {
             if mods.isEmpty { lockArmed = true; return }   // keys from the ⌥⇧ combo let go
-            if lockArmed, optionOnly || rightOnly {          // tap either ⌥ → stop
+            if lockArmed, rightOnly {                        // tap right ⌥ → stop
                 locked = false
                 lockArmed = false
                 onUnlock?()
@@ -65,23 +62,21 @@ final class HotkeyMonitor {
             locked = true
             lockArmed = false
             active = false
-            onLock?(rightOption)   // right ⌥⇧ = locked dictation; also upgrades a push-to-talk already listening
+            onLock?()   // also upgrades a push-to-talk already listening
             return
         }
 
-        if (optionOnly || rightOnly), pending == nil, !active {
-            let dictation = rightOnly
+        if rightOnly, pending == nil, !active {
             let work = DispatchWorkItem { [weak self] in
                 guard let self else { return }
                 self.pending = nil
                 self.active = true
-                self.activeSide = dictation
-                self.onBegin?(dictation)
+                self.onBegin?()
             }
             pending = work
             onArm?()
             DispatchQueue.main.asyncAfter(deadline: .now() + holdDelay, execute: work)
-        } else if !(activeSide ? rightOnly : optionOnly) {
+        } else if !rightOnly {
             if let pending { pending.cancel(); self.pending = nil; onDisarm?() }
             if active {
                 active = false

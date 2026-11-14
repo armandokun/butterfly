@@ -21,10 +21,6 @@ final class NowPlaying: ObservableObject {
             let now = elapsed + (playing ? Date().timeIntervalSince(at) : 0)
             return min(1, max(0, now / duration))
         }
-        var app: InstalledApp? {
-            guard let bundleID, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return nil }
-            return InstalledApp(name: url.deletingPathExtension().lastPathComponent, url: url)
-        }
         static func == (a: Track, b: Track) -> Bool {
             a.id == b.id && a.playing == b.playing && a.elapsed == b.elapsed && (a.artwork == nil) == (b.artwork == nil)
         }

@@ -1,7 +1,7 @@
 import AppKit
 
 /// Your custom words: one per line in ~/Library/Application Support/Butterfly/vocabulary.txt
-/// Used as speech-recognition hints AND to repair split words ("open mail dot sh" → "openmail.sh").
+/// Used as speech-recognition hints for dictation.
 @MainActor
 enum Vocabulary {
     static let fileURL: URL = {
@@ -27,20 +27,13 @@ enum Vocabulary {
             .filter { !$0.isEmpty && !$0.hasPrefix("#") }
     }
 
-    /// Hints for the speech model: your words + app names, plus spoken forms of addresses.
+    /// Hints for the speech model: your words, plus spoken forms of addresses.
     static var speechHints: [String] {
-        var hints = words + AppCatalog.shared.apps.map(\.name)
+        var hints = words
         for w in words where w.contains(".") {
             hints.append(w.replacingOccurrences(of: ".", with: " dot "))
         }
         return Array(Set(hints)).prefix(100).map { $0 }
-    }
-
-    /// Vocabulary entries whose letters appear in the transcript, ignoring spaces/dots.
-    /// "open mail dot sh" → letters "openmailsh" contains "openmailsh" → "openmail.sh".
-    static func matches(in transcript: String) -> [String] {
-        let spoken = compact(transcript.replacingOccurrences(of: " dot ", with: "."))
-        return words.filter { spoken.contains(compact($0)) }
     }
 
     /// Rewrites the file, keeping its comment lines.
@@ -54,9 +47,5 @@ enum Vocabulary {
     static func open() {
         _ = words   // ensure file exists
         NSWorkspace.shared.open(fileURL)
-    }
-
-    private static func compact(_ s: String) -> String {
-        s.lowercased().filter { $0.isLetter || $0.isNumber }
     }
 }
