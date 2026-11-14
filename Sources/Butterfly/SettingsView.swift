@@ -188,7 +188,7 @@ private struct MeetingsPane: View {
                     .onChange(of: mic) { AudioInput.preferredUID = mic }
                 }
             }
-            CardSection(title: "Transcripts", footer: "Gemini writes them, in Lithuanian or English. Saved in Documents › Butterfly Meetings.") {
+            CardSection(title: "Transcripts", footer: "Gemini writes the transcript, summary and action items. Lithuanian with English work terms is kept as spoken, never translated. Saved in Documents › Butterfly Meetings.") {
                 if Keychain.geminiKey == nil {
                     CardRow(title: "Needs a Gemini API key") {
                         Button("Add Key") { pane = "keys" }.buttonStyle(.puffyInk)
@@ -284,7 +284,7 @@ private struct RecordingRow: View {
 private struct KeysPane: View {
     var body: some View {
         PageBody {
-            KeySection(title: "Gemini", footer: "Writes meeting transcripts. Get one at aistudio.google.com.", prompt: "AIza…",
+            KeySection(title: "Gemini", footer: "Writes meeting notes and transcribes dictation. Get one at aistudio.google.com.", prompt: "AIza…",
                        saved: Keychain.geminiKey != nil, save: Keychain.saveGemini)
             Text("Keys are stored in your Keychain and never leave this Mac except to call their service.").secondaryText().padding(.horizontal, 4)
         }

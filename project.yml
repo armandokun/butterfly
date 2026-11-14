@@ -41,8 +41,8 @@ targets:
         SUPublicEDKey: USw1KgVHkB/jXNnMT/bvnUtfRp9Ouda3GTyoCHjs+Po=
         SUEnableAutomaticChecks: true
         LSUIElement: true
-        NSMicrophoneUsageDescription: Butterfly records your mic during meetings and while you hold Option to dictate.
-        NSSpeechRecognitionUsageDescription: Butterfly transcribes your dictation on-device.
+        NSMicrophoneUsageDescription: Butterfly records your mic during meetings to write the notes, and while you hold right Option to dictate.
+        NSSpeechRecognitionUsageDescription: Butterfly uses on-device speech recognition as a backup for dictation.
         NSAppleEventsUsageDescription: Butterfly lowers music volume while you dictate.
         NSCalendarsFullAccessUsageDescription: Butterfly names meeting recordings after your calendar events.
     entitlements:

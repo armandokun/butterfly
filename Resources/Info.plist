@@ -27,9 +27,9 @@
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>Butterfly names meeting recordings after your calendar events.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Butterfly records your mic during meetings and while you hold Option to dictate.</string>
+	<string>Butterfly records your mic during meetings to write the notes, and while you hold right Option to dictate.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Butterfly transcribes your dictation on-device.</string>
+	<string>Butterfly uses on-device speech recognition as a backup for dictation.</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUFeedURL</key>

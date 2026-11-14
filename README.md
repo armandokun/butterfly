@@ -1,6 +1,8 @@
 # Butterfly
 
-Meeting notes for your Mac, living in the notch. Records Zoom, Teams, Meet, Slack and FaceTime calls and writes the transcript. Hold right ⌥ to dictate anywhere.
+Meeting notes for Lithuanian teams, living in your Mac's notch. Butterfly records Zoom, Teams, Meet, Slack and FaceTime calls and writes the transcript, summary and action items, built for how Lithuanian business is actually spoken: Lithuanian with English work terms mixed in ("deploy'inti", "sprint'as", "OpenAI"). English stays English, nothing gets translated.
+
+Also: hold right ⌥ to dictate in Lithuanian or English anywhere you type.
 
 ## Install
 
@@ -13,7 +15,13 @@ Requires macOS 26 or later. Updates install automatically (or menu bar icon → 
 
 ## API key
 
-Paste a **[Gemini](https://aistudio.google.com/apikey)** key in **Settings** (menu bar icon → Settings…) for meeting transcripts. It's stored in your Keychain.
+Paste a **[Gemini](https://aistudio.google.com/apikey)** key in **Settings** (menu bar icon → Settings…). It's stored in your Keychain.
+
+Add names and terms your team uses (people, clients, products) in **Settings → Vocabulary** so they're spelled right.
+
+## Privacy
+
+Meeting audio and dictation go straight from your Mac to Google Gemini with your own key, and meeting files are deleted from Google right after. In the EU, Switzerland and the UK, Google doesn't train on it or have people review it, even on a free key. Elsewhere, use a key with billing turned on for the same terms ([Gemini API terms](https://ai.google.dev/gemini-api/terms)). Transcripts are saved in Documents › Butterfly Meetings.
 
 ## Build from source
 
