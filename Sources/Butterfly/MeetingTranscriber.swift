@@ -34,11 +34,13 @@ enum MeetingTranscriber {
             files.append(try await upload(audio.mixed, key: key))
         }
         let who = attendees.isEmpty ? "" : "\nParticipants (from the calendar): \(attendees.joined(separator: ", ")). Use these exact spellings."
+        let vocab = Vocabulary.words.prefix(200)
+        let terms = vocab.isEmpty ? "" : "\nNames and terms that may come up (the user's vocabulary): \(vocab.joined(separator: ", ")). When one is said, use this exact spelling."
         let intro = twoTracks
             ? "Two synchronized audio tracks of one work meeting\(title.map { " titled “\($0)”" } ?? ""), same timeline. Track 1 is \(me) alone (their microphone). Track 2 is everyone else."
             : "This is a recording of a work meeting\(title.map { " titled “\($0)”" } ?? "")."
         let prompt = """
-        \(intro)\(who)
+        \(intro)\(who)\(terms)
         People speak mostly Lithuanian, often corporate/tech Lithuanian with English terms mixed in. Keep English terms \
         in their English spelling (OpenAI, Anthropic'as, deploy'inti, sprint'as). If someone speaks English, keep it English. Never translate, never summarize.
 

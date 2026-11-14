@@ -1,23 +1,23 @@
 import AppKit
 
 /// Your custom words: one per line in ~/Library/Application Support/Butterfly/vocabulary.txt
-/// Used as speech-recognition hints for dictation.
+/// Used as speech-recognition hints for dictation, and as spellings for meeting transcripts.
 @MainActor
 enum Vocabulary {
-    static let fileURL: URL = {
+    nonisolated static let fileURL: URL = {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Butterfly", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("vocabulary.txt")
     }()
 
-    private static let starter = """
+    nonisolated private static let starter = """
     # Butterfly vocabulary: one word, name, or web address per line.
     # Helps speech recognition and fixes words it splits apart.
     openmail.sh
     """
 
-    static var words: [String] {
+    nonisolated static var words: [String] {
         if !FileManager.default.fileExists(atPath: fileURL.path) {
             try? starter.write(to: fileURL, atomically: true, encoding: .utf8)
         }

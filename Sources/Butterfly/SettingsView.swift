@@ -397,7 +397,7 @@ private struct VocabularyPane: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Design.section) {
                 CardSection(title: "Vocabulary",
-                            footer: "Names and web addresses, like “openmail.sh” or a colleague's name. Helps dictation spell them right.") {
+                            footer: "Names and web addresses, like “openmail.sh” or a colleague's name. Helps dictation and meeting transcripts spell them right.") {
                     ForEach($words) { $w in
                         VStack(spacing: 0) {
                             HStack {
