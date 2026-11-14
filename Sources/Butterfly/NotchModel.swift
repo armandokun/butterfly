@@ -55,15 +55,18 @@ final class NotchModel: ObservableObject {
 
     init() {
         recorder.onPartial = { [weak self] text in
-            guard let self, !self.isLocked else { return }
+            guard let self, !self.isLocked, !self.liveActive else { return }
             self.transcript = text
         }
         // Locked mode: show only the sentence in progress; run each one as it finalizes.
         recorder.onVolatile = { [weak self] text in
-            guard let self, self.isLocked, self.phase == .listening else { return }
+            guard let self, self.isLocked, self.phase == .listening, !self.liveActive else { return }
             self.transcript = text
         }
-        recorder.onSegment = { [weak self] text in self?.enqueue(text) }
+        recorder.onSegment = { [weak self] text, end in
+            guard let self, !self.liveActive, !self.liveFinishing else { return }   // Gemini Live types the sentences
+            self.enqueue(text, end: end)
+        }
         recorder.onLevel = { [weak self] level in
             guard let self else { return }
             self.peakLevel = max(self.peakLevel, CGFloat(level))
@@ -183,7 +186,11 @@ final class NotchModel: ObservableObject {
     func arm() { recorder.arm() }
     func disarm() { recorder.disarm() }
 
+    /// Bumps each press: a slow result from the last press mustn't close the new one.
+    private var press = 0
+
     func begin() {
+        press += 1
         dismissTask?.cancel()
         moveToActiveScreen()
         transcript = ""
@@ -193,6 +200,8 @@ final class NotchModel: ObservableObject {
         Ducker.duck()
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
         frontApp = NSWorkspace.shared.frontmostApplication.flatMap { $0.bundleIdentifier == Bundle.main.bundleIdentifier ? nil : $0 }
+        if !recorder.isArmed { recorder.resetClip() }   // ⌥⇧ straight away: no armed mic, so no audio yet
+        startLive(locked: isLocked)
         startTask = Task {
             do { try await recorder.start(onAudio: {}) }
             catch { show(.message("Mic error: \(error.localizedDescription)")) }
@@ -203,17 +212,30 @@ final class NotchModel: ObservableObject {
         guard phase == .listening, !isLocked else { return }
         Cues.stopped()
         Ducker.restore()
+        let myPress = press
         Task {
             await startTask?.value
-            let text = await recorder.stop()
+            let l = live
+            live = nil
+            let liveTask = l.map { l in Task { await l.finish() } }   // ends the turn now, in parallel with the mic stopping
+            let apple = await recorder.stop()
+            recorder.streamPCM(to: nil)
             let silent = peakLevel < 0.02
             peakLevel = 0
-            guard !text.isEmpty else {
-                // Total silence = wrong or muted mic, not a quiet voice: say which one, and where to change it.
-                if silent { return show(.system(symbol: "mic.slash", title: "Heard nothing", detail: "Using \(recorder.micName ?? "no microphone") · change it in Settings"), for: 3) }
-                return close()
+            // Total silence = wrong or muted mic, not a quiet voice: say which one, and where to change it.
+            if silent { l?.cancel(); return show(.system(symbol: "mic.slash", title: "Heard nothing", detail: "Using \(recorder.micName ?? "no microphone") · change it in Settings"), for: 3) }
+            var text: String
+            if let t = await liveTask?.value {
+                text = t
+            } else {
+                // Live didn't work: upload the clip instead (slower), else Apple's text.
+                if Keychain.geminiKey != nil { phase = .system(symbol: "waveform", title: "Transcribing", detail: nil) }
+                text = await transcribe(fallback: apple)
             }
-            close()
+            text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let pressedAgain = press != myPress   // a new press is listening: don't close it, just type
+            guard !text.isEmpty else { if !pressedAgain { close() }; return }
+            if !pressedAgain { close() }
             frontApp?.activate()
             try? await Task.sleep(for: .milliseconds(80))
             await Typer.type(text)
@@ -222,6 +244,9 @@ final class NotchModel: ObservableObject {
 
     func cancel() {
         guard !isLocked else { return }
+        live?.cancel()
+        live = nil
+        recorder.streamPCM(to: nil)
         Task {
             await startTask?.value
             await recorder.cancel()
@@ -233,15 +258,42 @@ final class NotchModel: ObservableObject {
     // MARK: Locked mode (⌥⇧): keep listening, type each sentence when you pause
 
     private var accepting = false          // still taking sentences (true until the mic fully stops)
-    private var queue: [String] = []
+    /// Sentences to type. `done`: already transcribed (Gemini Live); otherwise Apple's text + where it is in the clip.
+    private var queue: [(text: String, from: Double, to: Double, done: Bool)] = []
+    private var segmentStart = 0.0
     private var working = false
+
+    private var stopping: Task<Void, Never>?   // the last locked session still finishing
+    private var liveFinishing = false
 
     func lock() {
         guard !isLocked else { return }
         isLocked = true
+        // Locked again before the last one finished stopping: start fresh once it has (else it'd stop this mic).
+        if let stopping {
+            Task {
+                await stopping.value
+                guard isLocked else { return }
+                isLocked = false
+                phase = .idle
+                lock()
+            }
+            return
+        }
         accepting = true
         typedInDictation = false
-        if phase != .listening { begin() } else { dismissTask?.cancel() }
+        segmentStart = 0
+        if phase != .listening { begin() } else {
+            dismissTask?.cancel()
+            // Upgraded from a hold: finish the hold's turn (typed first), then a locked session for what comes next.
+            if let held = live {
+                live = nil
+                Task {
+                    if let t = await held.finish() { enqueueDone(t) }
+                }
+                startLive(locked: true, fromNow: true)
+            }
+        }
         NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
     }
 
@@ -251,33 +303,97 @@ final class NotchModel: ObservableObject {
         Cues.stopped()
         Ducker.restore()
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
-        Task {
+        stopping = Task {
             await startTask?.value
+            let l = live
+            live = nil
+            liveFinishing = l.map { !$0.hasFailed } ?? false   // Live still has the last words: Apple's copy would type them twice
+            let liveTask = l.map { l in Task { await l.finish() } }
             _ = await recorder.stop()   // flushes the last sentence through onSegment
+            recorder.streamPCM(to: nil)
+            _ = await liveTask?.value     // the last sentence arrives through onFinal
+            try? await Task.sleep(for: .milliseconds(50))
             accepting = false
+            liveFinishing = false
+            stopping = nil
             if !working { close() }
         }
     }
 
     private static let stopPhrase = #/^(ok(ay)?,? )?(stop( (listening|dictating|dictation|typing))?|that's all|i'm done|done)[.!]?$/#
 
-    private func enqueue(_ sentence: String) {
+    private func enqueue(_ sentence: String, end: Double) {
         let s = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
+        let from = segmentStart
+        segmentStart = end
         guard accepting, s.count > 1 else { return }
-        queue.append(s)
+        queue.append((s, from, end, false))
+        drain()
+    }
+
+    private func enqueueDone(_ sentence: String) {
+        let s = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard accepting, !s.isEmpty else { return }
+        queue.append((s, 0, 0, true))
+        drain()
+    }
+
+    private func drain() {
         guard !working else { return }
         working = true
         Task {
             while !queue.isEmpty {
-                let next = queue.removeFirst()
-                if next.lowercased().firstMatch(of: Self.stopPhrase) != nil { unlock(); continue }
+                let seg = queue.removeFirst()
+                if seg.text.lowercased().firstMatch(of: Self.stopPhrase) != nil { unlock(); continue }
+                let next = seg.done ? seg.text : await transcribe(fallback: seg.text, from: seg.from, to: seg.to)
+                guard !next.isEmpty else { continue }
                 frontApp?.activate()
-                await Typer.type((typedInDictation ? " " : "") + next)
+                await Typer.type((typedInDictation ? " " : "") + next.prefix(1).uppercased() + next.dropFirst())
                 typedInDictation = true
                 transcript = ""
             }
             working = false
             if !accepting { close() }
+        }
+    }
+
+    // MARK: Gemini Live (streams while you talk)
+
+    private var live: LiveDictation?
+    /// Push-to-talk: utterances Live has finished this press (typed on release).
+    private var liveSaid = ""
+    private var liveActive: Bool { live.map { !$0.hasFailed } ?? false }
+
+    private func startLive(locked: Bool = false, fromNow: Bool = false) {
+        live?.cancel()
+        live = nil
+        liveSaid = ""
+        guard let key = Keychain.geminiKey else { return }
+        let l = LiveDictation(key: key, vocabulary: Vocabulary.words, manual: !locked)
+        l.onInterim = { [weak self, weak l] t in
+            guard let self, let l, self.live === l, self.phase == .listening else { return }
+            self.transcript = self.isLocked ? t : LiveDictation.join([self.liveSaid, t])
+        }
+        l.onFinal = { [weak self, weak l] t in
+            guard let self, let l, self.live === l || self.isLocked || self.accepting else { return }
+            if self.isLocked || self.accepting { self.enqueueDone(t) }
+            else { self.liveSaid = LiveDictation.join([self.liveSaid, t]); if self.phase == .listening { self.transcript = self.liveSaid } }
+        }
+        live = l
+        recorder.streamPCM(to: { [weak l] d in l?.feed(d) }, includeSoFar: !fromNow)
+    }
+
+    /// Gemini hears Lithuanian (Apple's on-device speech doesn't); Apple's text if there's no key or Gemini fails.
+    private func transcribe(fallback: String, from: Double = 0, to: Double = .infinity) async -> String {
+        guard let key = Keychain.geminiKey, let wav = recorder.wav(from: max(0, from - 0.3), to: to.isFinite ? to + 0.3 : to) else { return fallback }
+        let t0 = Date()
+        do {
+            let t = try await MeetingTranscriber.dictation(wav: wav, key: key).trimmingCharacters(in: .whitespacesAndNewlines)
+            LiveDictation.log(String(format: "upload fallback %.1fs, %d words", Date().timeIntervalSince(t0), t.split(separator: " ").count))
+            return t.isEmpty ? fallback : t
+        } catch {
+            LiveDictation.log("upload fallback failed, using on-device text: \(error.localizedDescription)")
+            return fallback
         }
     }
 

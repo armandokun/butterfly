@@ -19,7 +19,7 @@ struct NotchView: View {
     private var presentation: Presentation {
         switch model.phase {
         case .idle: (model.recording != nil && model.recordingBadge) || model.transcribing != nil ? .compact : .closed
-        case .listening where model.transcript.isEmpty: .compact   // just widen beside the notch
+        case .listening: .compact   // just widen beside the notch: no live text
         case .badge: .compact
         default: .expanded
         }
@@ -169,15 +169,11 @@ struct NotchView: View {
         HStack(spacing: 12) {
             leading.frame(minWidth: 28, maxHeight: 28).fixedSize(horizontal: true, vertical: false)
             VStack(alignment: .leading, spacing: 2) {
-                if model.phase == .listening, !model.transcript.isEmpty {
-                    LiveTranscript(text: model.transcript)
-                } else {
-                    Text(title)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                        .truncationMode(.head)
-                }
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .truncationMode(.head)
                 if let subtitle {
                     Text(subtitle)
                         .font(.system(size: 11))
@@ -217,7 +213,7 @@ struct NotchView: View {
 
     private var title: String {
         switch model.phase {
-        case .listening: model.transcript.isEmpty ? "Listening…" : model.transcript
+        case .listening: "Listening…"
         case .system(_, let title, _): title
         case .message(let text): text
         case .badge(_, let text, _): text
@@ -433,57 +429,6 @@ private struct Waveform: View {
         }
         .frame(height: maxHeight + 4)
         .animation(.easeOut(duration: 0.08), value: levels)
-    }
-}
-
-/// Live transcript as a ticker: each word fades and slides in from the right, and the line glides left
-/// to make room; the oldest words fade out at the left edge.
-private struct LiveTranscript: View {
-    let text: String
-
-    // Stable ids: a word keeps its id while recognition rewrites later words, so only new/changed words animate.
-    private var words: [(id: String, word: String)] {
-        text.split(separator: " ").enumerated().map { ("\($0.offset)-\($0.element)", String($0.element)) }
-    }
-
-    @State private var lineWidth: CGFloat = 0
-
-    var body: some View {
-        GeometryReader { geo in
-            HStack(spacing: 4) {
-                ForEach(words, id: \.id) { w in
-                    Text(w.word)
-                        .fixedSize()
-                        .transition(.asymmetric(
-                            insertion: .modifier(active: WordIn(progress: 0), identity: WordIn(progress: 1)),
-                            removal: .opacity))
-                }
-            }
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(.white)
-            .fixedSize()
-            .background(GeometryReader { g in Color.clear.onAppear { lineWidth = g.size.width }.onChange(of: g.size.width) { _, w in lineWidth = w } })
-            // Short: starts at the left. Longer than the space: slides left so the newest word stays in view.
-            .offset(x: min(0, geo.size.width - lineWidth))
-            .frame(width: geo.size.width, alignment: .leading)
-            .mask(LinearGradient(stops: [.init(color: lineWidth > geo.size.width ? .clear : .black, location: 0),
-                                         .init(color: .black, location: 0.12), .init(color: .black, location: 1)],
-                                 startPoint: .leading, endPoint: .trailing))
-            .animation(.spring(response: 0.32, dampingFraction: 0.86), value: text)
-            .animation(.spring(response: 0.32, dampingFraction: 0.86), value: lineWidth)
-        }
-        .frame(height: 17)
-        .clipped()
-    }
-}
-
-private struct WordIn: ViewModifier {
-    let progress: CGFloat
-    func body(content: Content) -> some View {
-        content
-            .opacity(progress)
-            .blur(radius: (1 - progress) * 4)
-            .offset(x: (1 - progress) * 10)
     }
 }
 

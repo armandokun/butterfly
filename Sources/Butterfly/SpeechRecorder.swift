@@ -1,4 +1,5 @@
 @preconcurrency import AVFoundation
+import CoreMedia
 import Speech
 
 /// Push-to-talk recorder: on-device SpeechAnalyzer + live audio level.
@@ -6,8 +7,8 @@ import Speech
 final class SpeechRecorder {
     var onPartial: ((String) -> Void)?
     var onLevel: ((Float) -> Void)?
-    /// Locked mode: each finalized phrase, and the in-progress (not yet final) text.
-    var onSegment: ((String) -> Void)?
+    /// Locked mode: each finalized phrase and where it ends in the recording (seconds), and the in-progress text.
+    var onSegment: ((String, Double) -> Void)?
     var onVolatile: ((String) -> Void)?
 
     private var engine = AVAudioEngine()
@@ -25,6 +26,12 @@ final class SpeechRecorder {
     private var preparedLocale: Locale?
     /// Buffers received this recording (audio thread). 0 after a while = the engine is on a dead device.
     nonisolated(unsafe) private var buffers = 0
+    /// This recording's audio (analyzer format), kept until the next one starts: Gemini transcribes it (Lithuanian).
+    nonisolated private let clipLock = NSLock()
+    nonisolated(unsafe) private var clip: [AVAudioPCMBuffer] = []
+    /// Live dictation: gets this recording's audio as 16 kHz 16-bit PCM, from the start of the clip on.
+    nonisolated(unsafe) private var pcmSink: ((Data) -> Void)?
+    nonisolated(unsafe) private var pcmConverter: AVAudioConverter?
     /// Bumps when the mic setup changes, so a prepare that started before is thrown away.
     private var generation = 0
     private var listening = false
@@ -130,6 +137,7 @@ final class SpeechRecorder {
     /// ⌥ went down: start the mic now (the hold delay runs in parallel). Audio waits in the stream.
     func arm() {
         guard armed == nil else { return }
+        resetClip()
         armed = Task { [weak self] in
             guard let self else { throw CancellationError() }
             if let warming = self.warming { await warming.value }
@@ -230,7 +238,8 @@ final class SpeechRecorder {
                 if result.isFinal {
                     finalText += text
                     volatile = ""
-                    await MainActor.run { self?.onSegment?(text) }
+                    let end = CMTimeGetSeconds(result.range.end)
+                    await MainActor.run { self?.onSegment?(text, end.isFinite ? end : .infinity) }
                 } else {
                     volatile = text
                 }
@@ -285,6 +294,10 @@ final class SpeechRecorder {
         let level = Self.rms(buffer)
         if let out = convert(buffer) {
             inputContinuation?.yield(AnalyzerInput(buffer: out))
+            clipLock.withLock {
+                clip.append(out)
+                if let pcmSink, let d = pcm16(out) { pcmSink(d) }
+            }
         }
         Task { @MainActor [weak self] in self?.onLevel?(level) }
     }
@@ -313,6 +326,99 @@ final class SpeechRecorder {
         for (s, d) in zip(src, dst) {
             if let sp = s.mData, let dp = d.mData { memcpy(dp, sp, Int(s.mDataByteSize)) }
         }
+        return out
+    }
+
+    // MARK: Audio for Gemini
+
+    var isArmed: Bool { armed != nil }
+    /// A new recording starts: drop the last one's audio.
+    func resetClip() { clipLock.withLock { clip = [] } }
+
+    /// Sends this recording's audio so far, then every new buffer, to `sink` (nil stops). Same lock as the tap: nothing's lost or reordered.
+    nonisolated func streamPCM(to sink: ((Data) -> Void)?, includeSoFar: Bool = true) {
+        clipLock.withLock {
+            pcmSink = sink
+            guard let sink, includeSoFar else { return }
+            for b in clip { if let d = pcm16(b) { sink(d) } }
+        }
+    }
+
+    /// Analyzer-format buffer → 16 kHz mono Int16 bytes (converter kept across buffers, so resampling is seamless).
+    nonisolated private func pcm16(_ buffer: AVAudioPCMBuffer) -> Data? {
+        guard let target = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16000, channels: 1, interleaved: true) else { return nil }
+        if pcmConverter?.inputFormat != buffer.format { pcmConverter = AVAudioConverter(from: buffer.format, to: target) }
+        guard let conv = pcmConverter,
+              let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: AVAudioFrameCount(Double(buffer.frameLength) * 16000 / buffer.format.sampleRate) + 64)
+        else { return nil }
+        var fed = false
+        var error: NSError?
+        conv.convert(to: out, error: &error) { _, status in
+            if fed { status.pointee = .noDataNow; return nil }
+            fed = true
+            status.pointee = .haveData
+            return buffer
+        }
+        guard error == nil, out.frameLength > 0, let p = out.int16ChannelData?[0] else { return nil }
+        return Data(bytes: p, count: Int(out.frameLength) * 2)
+    }
+
+    /// The recording (or the part between two times, in seconds) as 16 kHz mono 16-bit WAV.
+    func wav(from start: Double = 0, to end: Double = .infinity) -> Data? {
+        let bufs = clipLock.withLock { clip }
+        guard let f = bufs.first?.format, f.sampleRate > 0 else { return nil }
+        let a = AVAudioFramePosition(max(0, start) * f.sampleRate)
+        let b = end.isFinite ? AVAudioFramePosition(end * f.sampleRate) : .max
+        guard let joined = Self.join(bufs, from: a, to: b), joined.frameLength > 0,
+              let target = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16000, channels: 1, interleaved: true),
+              let conv = AVAudioConverter(from: f, to: target),
+              let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: AVAudioFrameCount(Double(joined.frameLength) * 16000 / f.sampleRate) + 1024)
+        else { return nil }
+        var fed = false
+        var error: NSError?
+        conv.convert(to: out, error: &error) { _, status in
+            if fed { status.pointee = .endOfStream; return nil }
+            fed = true
+            status.pointee = .haveData
+            return joined
+        }
+        guard error == nil, let samples = out.int16ChannelData?[0], out.frameLength > 0 else { return nil }
+        let pcm = Data(bytes: samples, count: Int(out.frameLength) * 2)
+        var d = Data()
+        func u32(_ v: UInt32) { withUnsafeBytes(of: v.littleEndian) { d.append(contentsOf: $0) } }
+        func u16(_ v: UInt16) { withUnsafeBytes(of: v.littleEndian) { d.append(contentsOf: $0) } }
+        d.append(contentsOf: Array("RIFF".utf8)); u32(UInt32(36 + pcm.count)); d.append(contentsOf: Array("WAVEfmt ".utf8))
+        u32(16); u16(1); u16(1); u32(16000); u32(32000); u16(2); u16(16)
+        d.append(contentsOf: Array("data".utf8)); u32(UInt32(pcm.count)); d.append(pcm)
+        return d
+    }
+
+    /// Frames [a, b) of consecutive buffers, as one buffer.
+    nonisolated private static func join(_ bufs: [AVAudioPCMBuffer], from a: AVAudioFramePosition, to b: AVAudioFramePosition) -> AVAudioPCMBuffer? {
+        guard let f = bufs.first?.format else { return nil }
+        let bpf = Int(f.streamDescription.pointee.mBytesPerFrame)
+        let total = bufs.reduce(AVAudioFramePosition(0)) { $0 + AVAudioFramePosition($1.frameLength) }
+        let cap = min(b, total) - a
+        guard cap > 0, let out = AVAudioPCMBuffer(pcmFormat: f, frameCapacity: AVAudioFrameCount(cap)) else { return nil }
+        let dst = UnsafeMutableAudioBufferListPointer(out.mutableAudioBufferList)
+        var pos: AVAudioFramePosition = 0
+        var written = 0
+        for buf in bufs {
+            let n = AVAudioFramePosition(buf.frameLength)
+            let s = max(a, pos), e = min(b, pos + n)
+            if e > s {
+                let src = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: buf.audioBufferList))
+                for (sb, db) in zip(src, dst) {
+                    guard let sp = sb.mData, let dp = db.mData else { continue }
+                    memcpy(dp + written * bpf, sp + Int(s - pos) * bpf, Int(e - s) * bpf)
+                }
+                written += Int(e - s)
+            }
+            pos += n
+            if pos >= b { break }
+        }
+        out.frameLength = AVAudioFrameCount(written)
+        for i in dst.indices { dst[i].mDataByteSize = UInt32(written * bpf) }
         return out
     }
 

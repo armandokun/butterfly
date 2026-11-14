@@ -87,6 +87,23 @@ enum MeetingTranscriber {
         throw Failure(message: "Gemini returned no transcript (\(reasons.joined(separator: "; ")))")
     }
 
+    /// Right-⌥ dictation: a short clip → the words, Lithuanian or English (Apple's on-device speech has no Lithuanian).
+    static func dictation(wav: Data, key: String) async throws -> String {
+        let vocab = Vocabulary.words.prefix(200)
+        let prompt = """
+        Transcribe this voice dictation word for word. The speaker uses Lithuanian or English, sometimes mixed in one sentence: \
+        keep every word in the language it was spoken, with correct Lithuanian letters (ą, č, ę, ė, į, š, ų, ū, ž). Never translate.
+        Add normal punctuation and capitalization. Drop fillers ("uh", "um", "ee", "nu") and stutters.\(vocab.isEmpty ? "" : "\nWhen one of these is said, spell it exactly like this: \(vocab.joined(separator: ", ")).")
+        Output only the dictated text, nothing else. If there is no speech, output nothing.
+        """
+        let body: [String: Any] = [
+            "contents": [["parts": [["inline_data": ["mime_type": "audio/wav", "data": wav.base64EncodedString()]], ["text": prompt]]]],
+            "generationConfig": ["temperature": 0, "maxOutputTokens": 4096, "thinkingConfig": ["thinkingBudget": 0]],
+        ]
+        let d = try await request("POST", "/v1beta/models/\(model):generateContent", key: key, json: body, timeout: 30)
+        return extract(d).0 ?? ""
+    }
+
     /// Mostly "[mm:ss] Name: …" lines (the model sometimes drifts into writing notes).
     private static func isTranscript(_ t: String) -> Bool {
         if t == noSpeech { return true }

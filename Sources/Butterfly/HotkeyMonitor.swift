@@ -21,6 +21,8 @@ final class HotkeyMonitor {
     private var locked = false
     private var lockArmed = false   // every key released since locking; the next ⌥ tap unlocks
     private var monitors: [Any] = []
+    /// While holding: checks the keyboard itself, in case the release event never arrives (it sometimes doesn't).
+    private var holdCheck: Timer?
 
     static var hasAccessibility: Bool { AXIsProcessTrusted() }
 
@@ -62,6 +64,7 @@ final class HotkeyMonitor {
             locked = true
             lockArmed = false
             active = false
+            stopWatching()
             onLock?()   // also upgrades a push-to-talk already listening
             return
         }
@@ -71,6 +74,7 @@ final class HotkeyMonitor {
                 guard let self else { return }
                 self.pending = nil
                 self.active = true
+                self.watchRelease()
                 self.onBegin?()
             }
             pending = work
@@ -80,6 +84,7 @@ final class HotkeyMonitor {
             if let pending { pending.cancel(); self.pending = nil; onDisarm?() }
             if active {
                 active = false
+                stopWatching()
                 // Option released → finish. Another modifier added → treat as a shortcut.
                 mods.isEmpty ? onEnd?() : onCancel?()
             }
@@ -89,6 +94,26 @@ final class HotkeyMonitor {
     private func otherKeyPressed() {
         if locked { return }   // typing (yours or Butterfly's) doesn't stop locked mode
         if let pending { pending.cancel(); self.pending = nil; onDisarm?() }
-        if active { active = false; onCancel?() }
+        if active { active = false; stopWatching(); onCancel?() }
     }
+
+    private func watchRelease() {
+        holdCheck?.invalidate()
+        var misses = 0
+        holdCheck = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.active, !self.locked else { return }
+                // Right ⌥ down right now? Both readings, twice in a row: one stale reading mustn't end a hold.
+                let held = [CGEventSourceStateID.hidSystemState, .combinedSessionState]
+                    .contains { CGEventSource.flagsState($0).rawValue & 0x40 != 0 }
+                misses = held ? 0 : misses + 1
+                guard misses >= 2 else { return }
+                self.active = false
+                self.stopWatching()
+                self.onEnd?()
+            }
+        }
+    }
+
+    private func stopWatching() { holdCheck?.invalidate(); holdCheck = nil }
 }

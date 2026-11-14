@@ -17,6 +17,7 @@
 		2B0348786C73014B04CCDF18 /* Keychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 355F27E1A7A0D9404C0F209C /* Keychain.swift */; };
 		2B8C9CA2802549C40280F365 /* MeetingTranscriber.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A128397E1A4B889FBDB09E6 /* MeetingTranscriber.swift */; };
 		461BE62226B5AA800D274B4B /* AudioInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09E57D9827B34E2C0E4ED8EC /* AudioInput.swift */; };
+		47DE2C3DC0B88DF2C5D315FD /* LiveDictation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6079913AD7D6C73F720D8235 /* LiveDictation.swift */; };
 		4BA133C0B26AED9C6A169B76 /* Installer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59C82CED0988675BE67598E2 /* Installer.swift */; };
 		54BD7BFC3EEE748D085ED173 /* Design.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF40AC3F04B31C6A0D92F148 /* Design.swift */; };
 		5D2AA529014C3333B89DA7EE /* NotchShape.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5A416244CDF8D728E8484E5 /* NotchShape.swift */; };
@@ -51,6 +52,7 @@
 		355F27E1A7A0D9404C0F209C /* Keychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Keychain.swift; sourceTree = "<group>"; };
 		4C91EC106E73C9939D648B30 /* Meetings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Meetings.swift; sourceTree = "<group>"; };
 		59C82CED0988675BE67598E2 /* Installer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Installer.swift; sourceTree = "<group>"; };
+		6079913AD7D6C73F720D8235 /* LiveDictation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveDictation.swift; sourceTree = "<group>"; };
 		6E3EA935457316BC6B124849 /* Migration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Migration.swift; sourceTree = "<group>"; };
 		8E448B48DC2BE690C4A49645 /* HotkeyMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyMonitor.swift; sourceTree = "<group>"; };
 		948B4378EA38654619BB13E6 /* NowPlaying.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlaying.swift; sourceTree = "<group>"; };
@@ -96,6 +98,7 @@
 				8E448B48DC2BE690C4A49645 /* HotkeyMonitor.swift */,
 				59C82CED0988675BE67598E2 /* Installer.swift */,
 				355F27E1A7A0D9404C0F209C /* Keychain.swift */,
+				6079913AD7D6C73F720D8235 /* LiveDictation.swift */,
 				BD54775A814BE0023B4B4467 /* MeetingRecorder.swift */,
 				4C91EC106E73C9939D648B30 /* Meetings.swift */,
 				1A128397E1A4B889FBDB09E6 /* MeetingTranscriber.swift */,
@@ -250,6 +253,7 @@
 				6EF1EAAE11F003CCF8BAC277 /* HotkeyMonitor.swift in Sources */,
 				4BA133C0B26AED9C6A169B76 /* Installer.swift in Sources */,
 				2B0348786C73014B04CCDF18 /* Keychain.swift in Sources */,
+				47DE2C3DC0B88DF2C5D315FD /* LiveDictation.swift in Sources */,
 				B1E3A44B23A5EA07452174B9 /* MeetingRecorder.swift in Sources */,
 				2B8C9CA2802549C40280F365 /* MeetingTranscriber.swift in Sources */,
 				97A254532FDC114194AC4EBF /* Meetings.swift in Sources */,
