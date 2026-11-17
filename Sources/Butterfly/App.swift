@@ -7,6 +7,7 @@ import SwiftUI
 struct ButterflyMain {
     static func main() {
         AppDelegate.lastRun = CrashReporter.install()
+        if ProcessInfo.processInfo.environment["BUTTERFLY_CAPTURE_TEST"] == "1" { MainActor.assumeIsolated { CaptureTest.run() } }
         Migration.run()
         let app = NSApplication.shared
         let delegate = AppDelegate()

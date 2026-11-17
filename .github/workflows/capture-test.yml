@@ -1,0 +1,76 @@
+name: Capture test
+
+# A clean cloud Mac records a fake call, ScreenCaptureKit gets killed mid-call 7 times, and the recording must survive.
+# Guards against the 17 Nov 2026 bug (85 min call saved as 1 min).
+on:
+  workflow_dispatch:
+  push:
+    paths: ["Sources/Butterfly/MeetingRecorder.swift", "Sources/Butterfly/Meetings.swift", "Sources/Butterfly/CaptureTest.swift", ".github/workflows/capture-test.yml"]
+
+jobs:
+  capture:
+    runs-on: macos-26
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Mac info
+        run: sw_vers; csrutil status || true; system_profiler SPAudioDataType | head -40
+
+      - name: Virtual audio device (BlackHole) as default input and output
+        run: |
+          brew install --cask blackhole-2ch
+          sudo killall coreaudiod || true
+          sleep 5
+          brew install switchaudio-osx
+          SwitchAudioSource -a
+          SwitchAudioSource -t output -s "BlackHole 2ch" || true
+          SwitchAudioSource -t input -s "BlackHole 2ch" || true
+          echo "output: $(SwitchAudioSource -c -t output)  input: $(SwitchAudioSource -c -t input)"
+
+      - name: Build (ad-hoc signed)
+        run: ./scripts/build.sh
+
+      - name: Grant Screen Recording + Microphone (TCC)
+        run: |
+          now=$(date +%s)
+          grant() {  # db service client client_type
+            sudo sqlite3 "$1" "INSERT OR REPLACE INTO access (service, client, client_type, auth_value, auth_reason, auth_version, indirect_object_identifier, flags, last_modified) VALUES ('$2', '$3', $4, 2, 4, 1, 'UNUSED', 0, $now);"
+          }
+          SYS="/Library/Application Support/com.apple.TCC/TCC.db"
+          USR="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
+          BIN="$PWD/build/Butterfly.app/Contents/MacOS/Butterfly"
+          for db in "$SYS" "$USR"; do
+            for svc in kTCCServiceScreenCapture kTCCServiceMicrophone; do
+              grant "$db" $svc com.armandas.butterfly 0 || true
+              grant "$db" $svc "$BIN" 1 || true
+            done
+          done
+          sudo sqlite3 "$SYS" "SELECT service, client, auth_value FROM access WHERE client LIKE '%utterfly%';"
+          sudo sqlite3 "$USR" "SELECT service, client, auth_value FROM access WHERE client LIKE '%utterfly%';"
+          sudo killall tccd || true
+
+      - name: Run capture test (tone playing the whole time)
+        run: |
+          T=$RUNNER_TEMP
+          python3 -c "
+          import wave,struct,math
+          w=wave.open('$T/tone.wav','w');w.setnchannels(1);w.setsampwidth(2);w.setframerate(48000)
+          w.writeframes(b''.join(struct.pack('<h',int(8000*math.sin(2*math.pi*440*i/48000))) for i in range(48000*200)));w.close()"
+          afplay "$T/tone.wav" &
+          open -n -W --env BUTTERFLY_CAPTURE_TEST=1 --env BUTTERFLY_MEETINGS_DIR="$T/meetings" \
+            --stdout "$T/out.txt" --stderr "$T/out.txt" build/Butterfly.app || true
+          kill %1 || true
+          cat "$T/out.txt"
+          echo "--- meetings.log"; cat ~/Library/Logs/Butterfly/meetings.log || true
+          grep -q "CAPTURE TEST: PASS" "$T/out.txt"
+
+      - name: Upload recording
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: capture-test
+          path: |
+            ${{ runner.temp }}/meetings
+            ${{ runner.temp }}/out.txt
+            ~/Library/Logs/Butterfly

@@ -14,7 +14,8 @@ final class Meetings {
     private func emit(_ e: Event) { Self.log("\(e)"); onEvent?(e) }
 
     static var auto: Bool { UserDefaults.standard.object(forKey: "recordMeetings") as? Bool ?? true }
-    static let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    static let root = ProcessInfo.processInfo.environment["BUTTERFLY_MEETINGS_DIR"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+        ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("Butterfly Meetings", isDirectory: true)
 
     private struct Session {
@@ -58,6 +59,7 @@ final class Meetings {
     }
 
     func start() {
+        guard ticker == nil else { return }
         ticker = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { _ in
             MainActor.assumeIsolated { Meetings.shared.tick() }
         }
@@ -222,6 +224,8 @@ final class Meetings {
     private func tick() {
         let call = Self.callInProgress()
         if let s = session {
+            // Capture dead (macOS ended the stream, or no audio for 15 s): restart it, the call is still going.
+            if s.recorder.secondsSinceAudio > 15 { recover("no audio for \(Int(s.recorder.secondsSinceAudio)) s") }
             if call != nil {
                 if quietSince != nil { Self.log("mic back: \(s.app)"); if askedStop { emit(.unaskStop) } }
                 quietSince = nil; askedStop = false; keep = false
@@ -251,6 +255,13 @@ final class Meetings {
         emit(.ask(app: name))
     }
 
+    /// Debug: the recorder of the running session (CaptureTest).
+    var debugRecorder: MeetingRecorder? { session?.recorder }
+    /// Capture restarts that worked, this run (CaptureTest).
+    private(set) var restarts = 0
+    /// CaptureTest: save the audio, skip Gemini.
+    static var testMode = false
+
     /// Debug (BUTTERFLY_MEETING_PROMPT=Dia): show the prompt as if a call started.
     func simulateAsk(_ app: String) { simulated = true; pending = ("\(app) call", true); emit(.ask(app: "\(app) call")) }
     private var simulated = false
@@ -278,8 +289,12 @@ final class Meetings {
         let name = (event?.title ?? app).replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
         let folder = Self.root.appendingPathComponent("\(stamp) \(name)", isDirectory: true)
         let recorder = MeetingRecorder(folder: folder)
+        recorder.onStop = { error in
+            DispatchQueue.main.async { MainActor.assumeIsolated { Meetings.shared.recover("stream stopped: \(error.localizedDescription)") } }
+        }
         session = Session(recorder: recorder, app: app, browser: browser, started: Date(), event: event, manual: manual)
         quietSince = nil
+        recoverFails = 0
         Task {
             do {
                 try await recorder.start(micUID: AudioInput.chosen?.uid)
@@ -295,12 +310,42 @@ final class Meetings {
         }
     }
 
+    private var recovering = false
+    private var recoverFails = 0
+
+    /// Restarts a capture that died mid-call. Tells you if it keeps failing, so a meeting is never lost in silence.
+    private func recover(_ why: String) {
+        guard let s = session, !recovering else { return }
+        recovering = true
+        Self.log("capture lost (\(why)), restarting")
+        Task {
+            do {
+                try await s.recorder.restart()
+                recoverFails = 0
+                restarts += 1
+                Self.log("capture restarted")
+            } catch {
+                recoverFails += 1
+                Self.log("restart failed \(recoverFails): \(error.localizedDescription)")
+                if recoverFails == 2 { emit(.failed("Recording stopped, retrying: \(error.localizedDescription)")) }
+            }
+            recovering = false
+        }
+    }
+
     func stop(byHand: Bool = false) {
         guard let s = session else { return }
         session = nil
         askedStop = false; keep = false
         if byHand { dismissed = s.app.replacingOccurrences(of: " call", with: "") }
         Task { await finish(s) }
+    }
+
+    /// CaptureTest: stop and save the audio without transcribing. Returns the mixed file.
+    func stopForTest() async throws -> URL {
+        guard let s = session else { throw MeetingRecorder.Failure.noDisplay }
+        session = nil
+        return try await s.recorder.stop()
     }
 
     private func finish(_ s: Session) async {

@@ -20,6 +20,11 @@ final class MeetingRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
     private let queue = DispatchQueue(label: "butterfly.meeting.audio", qos: .userInitiated)
     private var tracks: [Track] = []
     private(set) var lastError: Error?
+    /// Called (on any thread) when macOS ends the capture on its own. The meeting goes on, so restart.
+    var onStop: ((Error) -> Void)?
+    private var micUID: String?
+    private var stopped = false
+    private var lastBuffer = Date()   // on `queue`
 
     /// One stream (call audio or mic) → one AAC file, gaps filled with silence so both stay in sync.
     private final class Track {
@@ -105,6 +110,30 @@ final class MeetingRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
     /// - Parameter micUID: the mic to record (nil = the system's input).
     func start(micUID: String?) async throws {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        self.micUID = micUID
+        tracks = [Track(them), Track(me)]
+        try await startStream()
+    }
+
+    /// Capture died mid-call: start a fresh stream into the same files. The gap becomes silence, timeline stays in sync.
+    func restart() async throws {
+        queue.sync { lastBuffer = Date() }   // don't re-trigger the stall check while this runs
+        try? await stream?.stopCapture()
+        stream = nil
+        guard !stopped else { return }
+        try await startStream()
+    }
+
+    /// Seconds since the last audio buffer. The mic sends buffers even in silence, so a long gap = capture is dead.
+    var secondsSinceAudio: TimeInterval { queue.sync { Date().timeIntervalSince(lastBuffer) } }
+
+    /// Debug: end the capture behind Butterfly's back, like macOS did on 17 Nov. `notify` = also report it (didStopWithError).
+    func debugKill(notify: Bool) async {
+        try? await stream?.stopCapture()
+        if notify { onStop?(NSError(domain: "debug", code: 1, userInfo: [NSLocalizedDescriptionKey: "simulated"])) }
+    }
+
+    private func startStream() async throws {
         let content: SCShareableContent
         do { content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false) }
         catch { throw Failure.permission }
@@ -122,24 +151,28 @@ final class MeetingRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
         c.width = 2; c.height = 2
         c.minimumFrameInterval = CMTime(value: 1, timescale: 1)
         c.showsCursor = false
-        tracks = [Track(them), Track(me)]
         let s = SCStream(filter: filter, configuration: c, delegate: self)
         try s.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
         try s.addStreamOutput(self, type: .audio, sampleHandlerQueue: queue)
         try s.addStreamOutput(self, type: .microphone, sampleHandlerQueue: queue)
         try await s.startCapture()
+        queue.sync { lastBuffer = Date() }
+        if stopped { try? await s.stopCapture(); return }   // stop() ran while this was starting
         stream = s
     }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sb: CMSampleBuffer, of type: SCStreamOutputType) {
         switch type {
-        case .audio: tracks.first?.append(sb)
-        case .microphone: tracks.last?.append(sb)
+        case .audio: tracks.first?.append(sb); lastBuffer = Date()
+        case .microphone: tracks.last?.append(sb); lastBuffer = Date()
         default: break
         }
     }
 
-    func stream(_ stream: SCStream, didStopWithError error: Error) { lastError = error }
+    func stream(_ stream: SCStream, didStopWithError error: Error) {
+        lastError = error
+        onStop?(error)
+    }
 
     /// Seconds recorded, and how loud each side got (0 = silent).
     /// How loud the call is right now (either side), 0…1. Read from the UI, a slightly stale value is fine.
@@ -160,6 +193,7 @@ final class MeetingRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchec
 
     /// Stops and mixes. Returns the mixed file (or the one side that has audio).
     func stop() async throws -> URL {
+        stopped = true
         try? await stream?.stopCapture()
         stream = nil
         let starts: [CMTime?] = queue.sync { tracks.forEach { $0.close() }; return tracks.map(\.start) }
