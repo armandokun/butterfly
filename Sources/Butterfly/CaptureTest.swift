@@ -11,7 +11,8 @@ enum CaptureTest {
         Meetings.shared.start()   // the 1.5 s tick that runs the stall watchdog
         Task {
             let failures = await scenario()
-            print(failures.isEmpty ? "CAPTURE TEST: PASS" : "CAPTURE TEST: FAIL\n- " + failures.joined(separator: "\n- "))
+            let result = failures.isEmpty ? "CAPTURE TEST: PASS" : "CAPTURE TEST: FAIL\n- " + failures.joined(separator: "\n- ")
+            print(result); Meetings.log(result)
             exit(failures.isEmpty ? 0 : 1)
         }
         RunLoop.main.run()

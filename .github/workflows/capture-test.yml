@@ -63,7 +63,7 @@ jobs:
           kill %1 || true
           cat "$T/out.txt"
           echo "--- meetings.log"; cat ~/Library/Logs/Butterfly/meetings.log || true
-          grep -q "CAPTURE TEST: PASS" "$T/out.txt"
+          grep -q "CAPTURE TEST: PASS" ~/Library/Logs/Butterfly/meetings.log
 
       - name: Upload recording
         if: always()
