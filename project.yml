@@ -41,6 +41,10 @@ targets:
         SUPublicEDKey: USw1KgVHkB/jXNnMT/bvnUtfRp9Ouda3GTyoCHjs+Po=
         SUEnableAutomaticChecks: true
         LSUIElement: true
+        # butterfly://cortex?url=…&key=… (from Cortex › Connectors) connects meeting sync.
+        CFBundleURLTypes:
+          - CFBundleURLName: com.armandas.butterfly
+            CFBundleURLSchemes: [butterfly]
         NSMicrophoneUsageDescription: Butterfly records your mic during meetings to write the notes, and while you hold right Option to dictate.
         NSSpeechRecognitionUsageDescription: Butterfly uses on-device speech recognition as a backup for dictation.
         NSAppleEventsUsageDescription: Butterfly lowers music volume while you dictate.

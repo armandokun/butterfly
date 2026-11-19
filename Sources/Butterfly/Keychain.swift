@@ -8,6 +8,11 @@ enum Keychain {
     static var geminiKey: String? { read("gemini-api-key", env: "GEMINI_API_KEY") }
     static func saveGemini(_ key: String) { write(key, "gemini-api-key") }
 
+    /// Cortex (shared memory) connection: its ingest URL and Butterfly's key there.
+    static var cortexURL: String? { read("cortex-url", env: "CORTEX_URL") }
+    static var cortexKey: String? { read("cortex-key", env: "CORTEX_KEY") }
+    static func saveCortex(url: String, key: String) { write(url, "cortex-url"); write(key, "cortex-key") }
+
     private static func read(_ account: String, env: String) -> String? {
         if let v = ProcessInfo.processInfo.environment[env], !v.isEmpty { return v }
         let query: [String: Any] = [

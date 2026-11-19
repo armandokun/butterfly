@@ -198,6 +198,11 @@ private struct MeetingsPane: View {
                     Button("Open") { Meetings.openFolder() }.buttonStyle(.puffy)
                 }
             }
+            CardSection(title: "Cortex", footer: "Sends each transcript to Cortex, which remembers the decisions, people and plans in it. Connect from Cortex › Connectors › Butterfly.") {
+                CardRow(title: Cortex.connected ? "Connected" : "Not connected", last: true) {
+                    if Cortex.connected { Button("Resend All") { Cortex.sendAll(again: true) }.buttonStyle(.puffy) }
+                }
+            }
             let shown = showAll ? recordings : Array(recordings.prefix(10))
             VStack(alignment: .leading, spacing: 10) {
                 CardSection(title: "Recordings", footer: recordings.isEmpty ? "No recordings yet." : nil) {

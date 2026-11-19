@@ -43,6 +43,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         openSettings = { scenes.environment.openSettings() }
     }
 
+    /// `butterfly://cortex?…` from Cortex → Connectors: connect and send past meetings.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls where Cortex.handle(url) { model.notify(.system(symbol: "brain", title: "Connected to Cortex", detail: "Sending your meetings"), for: 4) }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         if ProcessInfo.processInfo.environment["BUTTERFLY_DEBUG"] == "1" { setlinebuf(stdout) }
         if Installer.offerMoveToApplications() { return }
@@ -64,6 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkey.onUnlock = { [weak self] in self?.model.unlock() }
         hotkey.start()
         model.startObservers()
+        Cortex.sendAll()
 
         setUpMenu()
         LoginItem.applyDefault()

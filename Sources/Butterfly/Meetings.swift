@@ -335,6 +335,7 @@ final class Meetings {
             // No calendar event: the folder is named after the app ("Slack"). Name it after what was actually discussed.
             let (named, finalTitle) = s.event == nil ? await Self.titleFromTranscript(folder, text: text, key: key) : (folder, title)
             emit(.saved(title: finalTitle, folder: named))
+            Task { await Cortex.send(named) }
         } catch {
             try? (header + "_Transcription failed: \(error.localizedDescription)_\n\n_Butterfly retries on its own (next try in 1 min)._\n").write(to: transcript, atomically: true, encoding: .utf8)
             retries[folder.path] = (0, Date().addingTimeInterval(Self.retryDelays[0]))
@@ -368,6 +369,7 @@ final class Meetings {
                 retries[id] = nil
                 let (named, finalTitle) = Self.appNames.contains(title) ? await Self.titleFromTranscript(last, text: text, key: key) : (last, title)
                 emit(.saved(title: finalTitle, folder: named))
+            Task { await Cortex.send(named) }
                 done?(named)
             } catch {
                 // Network dropped mid-try: that attempt doesn't count.

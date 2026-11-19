@@ -38,6 +38,7 @@
 		DFB57E8C1EB711E4AEE78730 /* CrashReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C5B60E2DB9A9093B264CAF9 /* CrashReporter.swift */; };
 		E7191FE2606315DE9E5C3D4F /* Updates.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6A056B1B035D138B6ABB0B5 /* Updates.swift */; };
 		E7CBD4FF4E57EBCF482367D5 /* Migration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E3EA935457316BC6B124849 /* Migration.swift */; };
+		EB37EAA7600EC09D9F108977 /* Cortex.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF5BBC0BBB399102591402F9 /* Cortex.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -71,6 +72,7 @@
 		E02729203DCB0B255C0EBEE6 /* Agenda.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agenda.swift; sourceTree = "<group>"; };
 		E48D88D3ABF066D3E1A14D99 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		E6A056B1B035D138B6ABB0B5 /* Updates.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Updates.swift; sourceTree = "<group>"; };
+		EF5BBC0BBB399102591402F9 /* Cortex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Cortex.swift; sourceTree = "<group>"; };
 		F6C08FD0EB3FF75D95F2EEF7 /* NotchModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotchModel.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -92,6 +94,7 @@
 				E02729203DCB0B255C0EBEE6 /* Agenda.swift */,
 				0EA7E9D2BAF3CF5606E021ED /* App.swift */,
 				09E57D9827B34E2C0E4ED8EC /* AudioInput.swift */,
+				EF5BBC0BBB399102591402F9 /* Cortex.swift */,
 				9C5B60E2DB9A9093B264CAF9 /* CrashReporter.swift */,
 				33B9CAD9D243ABA8C282D744 /* Cues.swift */,
 				CF40AC3F04B31C6A0D92F148 /* Design.swift */,
@@ -247,6 +250,7 @@
 				791857762AEFB44D998990E4 /* Agenda.swift in Sources */,
 				9D4A81267532E1FAF8027927 /* App.swift in Sources */,
 				461BE62226B5AA800D274B4B /* AudioInput.swift in Sources */,
+				EB37EAA7600EC09D9F108977 /* Cortex.swift in Sources */,
 				DFB57E8C1EB711E4AEE78730 /* CrashReporter.swift in Sources */,
 				6F25EED9EC3EA48E0D97422D /* Cues.swift in Sources */,
 				54BD7BFC3EEE748D085ED173 /* Design.swift in Sources */,
