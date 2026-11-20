@@ -50,13 +50,9 @@ fi
 rm -f "$ZIP"
 
 # Classic install: open the disk image → drag Butterfly onto Applications.
-STAGE="$OUT/dmg"
-rm -rf "$STAGE"; mkdir -p "$STAGE"
-ditto "$APP" "$STAGE/Butterfly.app"
-ln -s /Applications "$STAGE/Applications"
 DMG="$OUT/Butterfly.dmg"
-hdiutil create -volname "Butterfly" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
-rm -rf "$STAGE"
+./scripts/dmg.sh "$APP" "$DMG"
+codesign --force --timestamp --sign "Developer ID Application" "$DMG"
 if (( NOTARIZE )); then
   xcrun notarytool submit "$DMG" --keychain-profile Butterfly --wait
   xcrun stapler staple "$DMG"
