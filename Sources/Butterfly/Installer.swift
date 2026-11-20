@@ -1,6 +1,6 @@
 import AppKit
 
-/// First launch from Downloads (or a zip): offer to move Butterfly into /Applications, then relaunch from there.
+/// First launch outside /Applications (e.g. Downloads, or opened from the disk image): offer to move into /Applications, then relaunch from there.
 enum Installer {
     static let target = URL(fileURLWithPath: "/Applications/Butterfly.app")
 
