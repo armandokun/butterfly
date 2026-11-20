@@ -1,8 +1,9 @@
 #!/bin/zsh
 # Publishes a Butterfly release that every install picks up (Sparkle checks the feed daily).
 #   ./scripts/release.sh 0.2.0
-# Builds → Developer ID + hardened runtime → notarized + stapled (if set up) → Butterfly.zip
-# → GitHub release on armandokun/butterfly with Butterfly.zip + appcast.xml.
+# Builds → Developer ID + hardened runtime → notarized + stapled (if set up) → Butterfly.dmg
+# (app + Applications shortcut: open the disk image and drag Butterfly to Applications)
+# → GitHub release on armandokun/butterfly with Butterfly.dmg + appcast.xml.
 # One-time setup (optional; without it, first open needs Open Anyway):
 #   xcrun notarytool store-credentials Butterfly --apple-id <you@icloud.com> --team-id NLHT9F6F5X
 #   Sparkle signing key lives in the login keychain ("butterfly"); back it up:
@@ -37,20 +38,33 @@ $SIGN --entitlements Resources/Butterfly.entitlements "$APP"
 codesign --verify --deep --strict "$APP"
 
 OUT=build/release; rm -rf "$OUT"; mkdir -p "$OUT"
-ZIP="$OUT/Butterfly.zip"
+# Notarize the app via a zip first (stapler staples the .app). Then pack the classic DMG.
+ZIP="$OUT/Butterfly-notarize.zip"
 ditto -c -k --keepParent "$APP" "$ZIP"
-# Notarized: opens with no warning. Not: first open needs System Settings → Privacy & Security → Open Anyway.
 if (( NOTARIZE )); then
   xcrun notarytool submit "$ZIP" --keychain-profile Butterfly --wait
   xcrun stapler staple "$APP"
-  rm "$ZIP"; ditto -c -k --keepParent "$APP" "$ZIP"
 else
   echo "Not notarized (no notarytool profile): first open needs Open Anyway."
 fi
+rm -f "$ZIP"
+
+# Classic install: open the disk image → drag Butterfly onto Applications.
+STAGE="$OUT/dmg"
+rm -rf "$STAGE"; mkdir -p "$STAGE"
+ditto "$APP" "$STAGE/Butterfly.app"
+ln -s /Applications "$STAGE/Applications"
+DMG="$OUT/Butterfly.dmg"
+hdiutil create -volname "Butterfly" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+rm -rf "$STAGE"
+if (( NOTARIZE )); then
+  xcrun notarytool submit "$DMG" --keychain-profile Butterfly --wait
+  xcrun stapler staple "$DMG"
+fi
 
 # Feed: one item, the latest release. Sparkle verifies the EdDSA signature against SUPublicEDKey.
-SIG=$($SPARKLE/sign_update --account butterfly "$ZIP")   # sparkle:edSignature="…" length="…"
-URL="https://github.com/$REPO/releases/download/v$VERSION/Butterfly.zip"
+SIG=$($SPARKLE/sign_update --account butterfly "$DMG")   # sparkle:edSignature="…" length="…"
+URL="https://github.com/$REPO/releases/download/v$VERSION/Butterfly.dmg"
 cat > "$OUT/appcast.xml" <<EOF
 <?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
@@ -73,7 +87,7 @@ LAST=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
 git log --format='- %s' ${LAST:+$LAST..}HEAD > "$OUT/notes.md"
 
 git commit -qam "Release $VERSION" && git tag "v$VERSION" && git push -q && git push -q origin "v$VERSION"
-gh release create "v$VERSION" -R "$REPO" --title "Butterfly $VERSION" --notes-file "$OUT/notes.md" "$ZIP" "$OUT/appcast.xml"
+gh release create "v$VERSION" -R "$REPO" --title "Butterfly $VERSION" --notes-file "$OUT/notes.md" "$DMG" "$OUT/appcast.xml"
 
 pkill -x Butterfly 2>/dev/null && sleep 1 || true
 rm -rf /Applications/Butterfly.app

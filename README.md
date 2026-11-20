@@ -6,9 +6,9 @@ Also: hold right ⌥ to dictate in Lithuanian or English anywhere you type.
 
 ## Install
 
-1. Download **[Butterfly.zip](https://github.com/armandokun/butterfly/releases/latest/download/Butterfly.zip)**.
-2. Unzip it and drag **Butterfly** to **Applications**.
-3. Open it. macOS says it can't check it for malicious software: click **Done**, then **System Settings → Privacy & Security → Open Anyway**. Only the first time.
+1. Download **[Butterfly.dmg](https://github.com/armandokun/butterfly/releases/latest/download/Butterfly.dmg)**.
+2. Open it and drag **Butterfly** to **Applications**.
+3. Open Butterfly from Applications. macOS says it can't check it for malicious software: click **Done**, then **System Settings → Privacy & Security → Open Anyway**. Only the first time.
 4. Allow Microphone, Screen Recording (call audio) and Accessibility (dictation) when asked.
 
 Requires macOS 26 or later. Updates install automatically (or menu bar icon → **Check for Updates…**).
